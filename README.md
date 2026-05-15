@@ -70,3 +70,34 @@ jobs:
           # Add other env vars as needed
         run: |
           python short_creator.py
+
+MUSIC REQUIREMENTS
+Must be royalty-free with proper licensing
+Supported sources:
+Bundle music file with license documentation
+Provide URL to permissively licensed music
+
+
+This implementation provides:
+
+1. **Telegram Integration:** Fetches images and captions from specified channels
+2. **Video Creation:** Generates 9:16 vertical videos with animated captions
+3. **Audio Handling:** Adds properly licensed background music
+4. **YouTube Upload:** Resumable uploads with progress tracking
+5. **Configuration:** Flexible parameters via environment variables
+6. **Error Handling:** Comprehensive logging and error recovery
+7. **CI/CD Ready:** Designed for automated execution in GitHub Actions
+
+To use this system:
+
+1. Set up your credentials and secrets
+2. Configure your preferred settings in environment variables
+3. Run the script manually or via scheduled CI/CD
+4. Monitor the logs for execution details and troubleshooting
+
+The script will automatically:
+- Fetch the latest suitable content from your Telegram channels
+- Create an optimized YouTube Short with caption animations
+- Add properly licensed background music
+- Upload directly to YouTube with your configured metadata
+- Handle all temporary file cleanup
