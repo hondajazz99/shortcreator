@@ -60,7 +60,7 @@ class TelegramClient:
         self.session = requests.Session()
 
     def get_latest_image(self, channel: str) -> Optional[Tuple[str, str]]:
-    try:
+    try:  # ← needs one extra level of indent (4 spaces inside the def)
         url = f"{self.base_url}getUpdates?allowed_updates=[\"channel_post\"]"
         updates = self.session.get(url).json()
         if not updates["ok"]:
