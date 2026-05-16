@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import moviepy.editor as mp
 import numpy as np
@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def get_env_json(key: str, default: str = "[]") -> list | dict:
+def get_env_json(key: str, default: str = "[]") -> Union[list, dict]:
     """Safely get and parse JSON environment variables"""
     try:
         value = os.getenv(key)
