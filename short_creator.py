@@ -222,7 +222,7 @@ class VideoCreator:
             if arr is None or arr.size == 0:
                 raise ValueError("Empty frame array")
             return arr
-            except Exception as e:
+        except Exception as e:
             logger.error(f"Caption frame generation failed: {str(e)}")
             # Return plain image as fallback
             return np.array(img.convert("RGB"))
