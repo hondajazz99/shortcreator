@@ -1,7 +1,7 @@
 # requirements.txt
 moviepy>=2.2.1
-pillow==10.1.0
-numpy>=1.24.4  
+pillow>=10.4.0,<11.0.0
+numpy>=1.25.0,<2.0.0
 requests==2.31.0
 python-telegram-bot>=13.15
 google-auth==2.23.0
