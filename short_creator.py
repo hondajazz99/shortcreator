@@ -250,52 +250,62 @@ class YouTubeUploader:
     def __init__(self, credentials: dict):
         self.credentials = credentials
 
-    def upload_short(self, video_path: Path, config: Config):
+    def upload_short(self, video_path: Path, config: Config, caption: str = ""):
         try:
             creds = Credentials.from_authorized_user_info(self.credentials)
             youtube = build("youtube", "v3", credentials=creds)
-            
-            # Prepare metadata
-            title = config.TITLE_TEMPLATE.format(
-                channel=random.choice(config.TELEGRAM_CHANNELS),
-                date=datetime.now().strftime("%Y-%m-%d")
-            )
-            
-            # Upload video
+
+            # Generate hashtags from caption words
+            caption_tags = [
+                word.strip("#.,!?").lower()
+                for word in caption.split()
+                if len(word.strip("#.,!?")) > 3
+            ]
+            all_tags = config.TAGS + caption_tags
+            hashtags = " ".join(f"#{tag}" for tag in caption_tags[:5])
+
+            # Title: "Video Short + caption + datetime"
+            date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            title = f"Video Short {caption[:50]} {date_str}"
+
+            # Description with hashtags
+            description = f"{config.DESCRIPTION}\n\n{hashtags}\n#Shorts"
+
             body = {
                 "snippet": {
                     "title": title,
-                    "description": config.DESCRIPTION,
-                    "tags": config.TAGS,
+                    "description": description,
+                    "tags": all_tags,
                     "categoryId": "22"
                 },
                 "status": {
                     "privacyStatus": config.PRIVACY_STATUS
                 }
             }
-            
+
             media = MediaFileUpload(
                 str(video_path),
                 chunksize=-1,
                 resumable=True
             )
-            
+
             request = youtube.videos().insert(
                 part=",".join(body.keys()),
                 body=body,
                 media_body=media
             )
-            
+
             response = None
             while response is None:
                 status, response = request.next_chunk()
                 if status:
                     logger.info(f"Uploaded {int(status.progress() * 100)}%")
-            
+
             logger.info(f"Video uploaded: https://youtu.be/{response['id']}")
             return response
         except Exception as e:
             logger.error(f"Upload failed: {str(e)}")
+
 
 def main():
     try:
