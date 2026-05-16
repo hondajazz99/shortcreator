@@ -5,7 +5,7 @@ import logging
 import random
 import requests
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -31,7 +31,7 @@ class Config:
     YOUTUBE_CLIENT_SECRETS: dict
     TITLE_TEMPLATE: str = "{channel} - {date}"
     DESCRIPTION: str = "Automated YouTube Short created from Telegram content"
-    TAGS: List[str] = ["Shorts", "Auto-generated", "Telegram"]
+    TAGS: List[str] = field(default_factory=lambda: ["Shorts", "Auto-generated", "Telegram"])
     PRIVACY_STATUS: str = "private"  # private | public | unlisted
     
     # Content
