@@ -1,5 +1,5 @@
 # requirements.txt
-moviepy==3.0.2
+moviepy==2.0.0
 pillow==10.1.0
 numpy==1.26.0
 requests==2.31.0
