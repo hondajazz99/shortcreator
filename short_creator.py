@@ -190,57 +190,93 @@ class VideoCreator:
 
     def _generate_caption_frame(self, text: str, highlight_word: str, img: Image.Image) -> np.ndarray:
         try:
+            from pilmoji import Pilmoji
+
             frame = img.copy().convert("RGBA")
             overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-            draw = ImageDraw.Draw(overlay)
 
             font = ImageFont.truetype(self.config.FONT_PATH, 52)
             font_bold = ImageFont.truetype(self.config.FONT_BOLD_PATH, 62)
-    
-            # Emoji font fallback
-            emoji_font_paths = [
-                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-                "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-                "/usr/share/fonts/truetype/noto-color-emoji/NotoColorEmoji.ttf",
-            ]
-            emoji_font = None
-            for path in emoji_font_paths:
-                if Path(path).exists():
-                    try:
-                        emoji_font = ImageFont.truetype(path, 109)  # NotoColorEmoji needs size 109
-                        logger.info(f"Emoji font loaded: {path}")
-                        break
-                    except Exception:
-                        continue
-            if not emoji_font:
-                logger.warning("Emoji font not found, emojis may not render")
-        
-            result = Image.alpha_composite(frame, overlay)
-            arr = np.array(result.convert("RGB"))
-        
-            # Safety check
-            if arr is None or arr.size == 0:
-                raise ValueError("Empty frame array")
-            return arr
+
+            words = text.split()
+            img_w, img_h = frame.size
+            padding = 24
+            line_height = 75
+            max_width = img_w * 0.85
+
+            # Word wrap using pilmoji-aware measurement
+            def measure_word(word, fnt):
+                dummy = Image.new("RGBA", (1, 1))
+                with Pilmoji(dummy) as pj:
+                    bbox = pj.getsize(word, fnt)
+                return bbox[0]
+
+            lines = []
+            current_line = []
+            current_width = 0
+            for word in words:
+                word_w = measure_word(word + " ", font)
+                if current_width + word_w > max_width and current_line:
+                    lines.append(current_line)
+                    current_line = [word]
+                    current_width = word_w
+                else:
+                    current_line.append(word)
+                    current_width += word_w
+            if current_line:
+                lines.append(current_line)
+
+            total_height = line_height * len(lines) + padding * 2
+            block_top = img_h - total_height - padding * 2
+            block_bottom = img_h - padding
+
+            # Draw background on overlay
+            draw = ImageDraw.Draw(overlay)
+            draw.rectangle(
+                (padding, block_top, img_w - padding, block_bottom),
+                fill=(0, 0, 0, 200)
+            )
+
+            # Composite overlay onto frame before drawing text
+            frame = Image.alpha_composite(frame, overlay)
+
+            # Draw text with emoji using Pilmoji
+            with Pilmoji(frame) as pj:
+                for line_idx, line_words in enumerate(lines):
+                    line_w = sum(measure_word(w + " ", font) for w in line_words)
+                    x = (img_w - line_w) // 2
+                    y = block_top + padding + line_idx * line_height
+
+                    for word in line_words:
+                        clean_word = word.lower().strip(".,!?:;\"'")
+                        clean_highlight = highlight_word.lower().strip(".,!?:;\"'")
+                        is_highlight = clean_word == clean_highlight and highlight_word != ""
+
+                        current_font = font_bold if is_highlight else font
+
+                        if is_highlight:
+                            word_w = measure_word(word, current_font)
+                            draw_bg = ImageDraw.Draw(frame)
+                            draw_bg.rectangle(
+                                (x - 4, y - 2, x + word_w + 4, y + line_height - 10),
+                                fill=(255, 200, 0, 220)
+                            )
+                            color = (0, 0, 0, 255)
+                        else:
+                            color = (255, 255, 255, 255)
+
+                        # Shadow
+                        pj.text((x + 2, y + 2), word, font=current_font, fill=(0, 0, 0, 180))
+                        # Word with emoji support
+                        pj.text((x, y), word, font=current_font, fill=color)
+
+                        x += measure_word(word + " ", current_font)
+
+            return np.array(frame.convert("RGB"))
+
         except Exception as e:
             logger.error(f"Caption frame generation failed: {str(e)}")
-            # Return plain image as fallback
             return np.array(img.convert("RGB"))
-
-        def is_emoji(char: str) -> bool:
-            cp = ord(char)
-            return (
-            0x1F300 <= cp <= 0x1FABF or  # misc symbols, emoticons
-            0x1F600 <= cp <= 0x1F64F or  # emoticons
-            0x1F680 <= cp <= 0x1F6FF or  # transport
-            0x2600  <= cp <= 0x26FF  or  # misc symbols
-            0x2700  <= cp <= 0x27BF  or  # dingbats
-            0xFE00  <= cp <= 0xFE0F  or  # variation selectors
-            0x1F900 <= cp <= 0x1F9FF or  # supplemental symbols
-            0x1FA00 <= cp <= 0x1FA6F or  # chess symbols
-            cp == 0x200D               or  # zero width joiner
-            0x1F1E0 <= cp <= 0x1F1FF     # flags
-            )
 
     def draw_word_with_emoji(draw, x, y, word, font, color):
         """Draw word char by char, switching to emoji font when needed"""
