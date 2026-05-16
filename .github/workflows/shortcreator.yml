@@ -9,7 +9,7 @@ jobs:
 
     steps:
       - name: Install fonts
-        run: sudo apt-get install -y fonts-dejavu-core
+        run: sudo apt-get install -y fonts-dejavu-core fonts-noto-color-emoji
         
       - name: Checkout repo
         uses: actions/checkout@v4
