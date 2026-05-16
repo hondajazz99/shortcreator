@@ -246,6 +246,7 @@ class VideoCreator:
 
             # Generate TTS with word timings
             tts_path, word_timings = await self._generate_tts(caption)
+            logger.info(f"Word timings received: {word_timings[:5]}")  # log first 5 words
             tts_audio = None
 
             if tts_path and tts_path.exists():
