@@ -268,44 +268,44 @@ class VideoCreator:
                 width += (bbox[2] - bbox[0])
         return width
 
-    words = text.split()
-    img_w, img_h = frame.size
-    padding = 24
-    line_height = 75
-    max_width = img_w * 0.85
+        words = text.split()
+        img_w, img_h = frame.size
+        padding = 24
+        line_height = 75
+        max_width = img_w * 0.85
 
-    # Word wrap
-    lines = []
-    current_line = []
-    current_width = 0
-    for word in words:
-        word_w = measure_word(word + " ", font)
-        if current_width + word_w > max_width and current_line:
+        # Word wrap
+        lines = []
+        current_line = []
+        current_width = 0
+        for word in words:
+            word_w = measure_word(word + " ", font)
+            if current_width + word_w > max_width and current_line:
+                lines.append(current_line)
+                current_line = [word]
+                current_width = word_w
+            else:
+                current_line.append(word)
+                current_width += word_w
+        if current_line:
             lines.append(current_line)
-            current_line = [word]
-            current_width = word_w
-        else:
-            current_line.append(word)
-            current_width += word_w
-    if current_line:
-        lines.append(current_line)
 
-    total_height = line_height * len(lines) + padding * 2
-    block_top = img_h - total_height - padding * 2
-    block_bottom = img_h - padding
+        total_height = line_height * len(lines) + padding * 2
+        block_top = img_h - total_height - padding * 2
+        block_bottom = img_h - padding
 
-    # Background
-    draw.rectangle(
-        (padding, block_top, img_w - padding, block_bottom),
-        fill=(0, 0, 0, 200)
-    )
+        # Background
+        draw.rectangle(
+            (padding, block_top, img_w - padding, block_bottom),
+            fill=(0, 0, 0, 200)
+        )
 
-    # Draw words
-    for line_idx, line_words in enumerate(lines):
-        # Measure full line width for centering
-        line_w = sum(measure_word(w + " ", font) for w in line_words)
-        x = (img_w - line_w) // 2
-        y = block_top + padding + line_idx * line_height
+        # Draw words
+        for line_idx, line_words in enumerate(lines):
+            # Measure full line width for centering
+            line_w = sum(measure_word(w + " ", font) for w in line_words)
+            x = (img_w - line_w) // 2
+            y = block_top + padding + line_idx * line_height
 
         for word in line_words:
             clean_word = word.lower().strip(".,!?:;\"'")
@@ -324,8 +324,8 @@ class VideoCreator:
             next_x = draw_word_with_emoji(draw, x, y, word, current_font, color)
             x = next_x + measure_word(" ", font)
 
-    result = Image.alpha_composite(frame, overlay)
-    return np.array(result.convert("RGB"))
+        result = Image.alpha_composite(frame, overlay)
+        return np.array(result.convert("RGB"))
 
     async def create_short(self, image_url: str, caption: str) -> Optional[Path]:
         img_path = Path("temp_image.jpg")
