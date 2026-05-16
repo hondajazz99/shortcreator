@@ -176,20 +176,20 @@ class VideoCreator:
         target_w, target_h = target_size
         orig_w, orig_h = img.size
     
-    # Calculate scale to fill target completely
-    scale = max(target_w / orig_w, target_h / orig_h)
-    new_w = int(orig_w * scale)
-    new_h = int(orig_h * scale)
+        # Calculate scale to fill target completely
+        scale = max(target_w / orig_w, target_h / orig_h)
+        new_w = int(orig_w * scale)
+        new_h = int(orig_h * scale)
     
-    # Resize
-    img = img.resize((new_w, new_h), Image.LANCZOS)
+        # Resize
+        img = img.resize((new_w, new_h), Image.LANCZOS)
     
-    # Center crop
-    left = (new_w - target_w) // 2
-    top = (new_h - target_h) // 2
-    img = img.crop((left, top, left + target_w, top + target_h))
+        # Center crop
+        left = (new_w - target_w) // 2
+        top = (new_h - target_h) // 2
+        img = img.crop((left, top, left + target_w, top + target_h))
     
-    return img
+        return img
     
     def _generate_caption_overlay(self, text: str, img_size: tuple) -> Optional[Image.Image]:
         """Generate a single overlay image with full caption instead of per-line clips"""
