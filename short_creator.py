@@ -189,34 +189,34 @@ class VideoCreator:
 
 
     def _generate_caption_frame(self, text: str, highlight_word: str, img: Image.Image) -> np.ndarray:
-    frame = img.copy().convert("RGBA")
-    overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
+        frame = img.copy().convert("RGBA")
+        overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
 
-    font = ImageFont.truetype(self.config.FONT_PATH, 52)
-    font_bold = ImageFont.truetype(self.config.FONT_BOLD_PATH, 62)
+        font = ImageFont.truetype(self.config.FONT_PATH, 52)
+        font_bold = ImageFont.truetype(self.config.FONT_BOLD_PATH, 62)
     
-    # Emoji font fallback
-    emoji_font_paths = [
-        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-        "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-        "/usr/share/fonts/truetype/noto-color-emoji/NotoColorEmoji.ttf",
-    ]
-    emoji_font = None
-    for path in emoji_font_paths:
-        if Path(path).exists():
-            try:
-                emoji_font = ImageFont.truetype(path, 109)  # NotoColorEmoji needs size 109
-                logger.info(f"Emoji font loaded: {path}")
-                break
-            except Exception:
-                continue
-    if not emoji_font:
-        logger.warning("Emoji font not found, emojis may not render")
+        # Emoji font fallback
+        emoji_font_paths = [
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/truetype/noto-color-emoji/NotoColorEmoji.ttf",
+        ]
+        emoji_font = None
+        for path in emoji_font_paths:
+            if Path(path).exists():
+                try:
+                    emoji_font = ImageFont.truetype(path, 109)  # NotoColorEmoji needs size 109
+                    logger.info(f"Emoji font loaded: {path}")
+                    break
+                except Exception:
+                    continue
+        if not emoji_font:
+            logger.warning("Emoji font not found, emojis may not render")
 
-    def is_emoji(char: str) -> bool:
-        cp = ord(char)
-        return (
+        def is_emoji(char: str) -> bool:
+            cp = ord(char)
+            return (
             0x1F300 <= cp <= 0x1FABF or  # misc symbols, emoticons
             0x1F600 <= cp <= 0x1F64F or  # emoticons
             0x1F680 <= cp <= 0x1F6FF or  # transport
@@ -227,7 +227,7 @@ class VideoCreator:
             0x1FA00 <= cp <= 0x1FA6F or  # chess symbols
             cp == 0x200D               or  # zero width joiner
             0x1F1E0 <= cp <= 0x1F1FF     # flags
-        )
+            )
 
     def draw_word_with_emoji(draw, x, y, word, font, color):
         """Draw word char by char, switching to emoji font when needed"""
