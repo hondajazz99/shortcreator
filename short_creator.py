@@ -350,7 +350,8 @@ def main():
             raise RuntimeError("Video creation failed")
 
         uploader = YouTubeUploader(config.YOUTUBE_CLIENT_SECRETS)
-        uploader.upload_short(video_path, config)
+        uploader.upload_short(video_path, config, caption=caption)  # ← pass caption here
+        #uploader.upload_short(video_path, config)
 
         # Cleanup
         if video_path.exists():
