@@ -115,8 +115,8 @@ class VideoCreator:
             return Path(self.music_cache / "default.mp3")
 
     def create_short(self, image_url: str, caption: str) -> Optional[Path]:
-    img_path = Path("temp_image.jpg")
-    try:
+        img_path = Path("temp_image.jpg")
+        try:
         # Download and process image
         img_data = requests.get(image_url).content
         img_path.write_bytes(img_data)
@@ -193,7 +193,7 @@ class VideoCreator:
     
     def _generate_caption_overlay(self, text: str, img_size: tuple) -> Optional[Image.Image]:
         """Generate a single overlay image with full caption instead of per-line clips"""
-    try:
+        try:
         font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
         font = ImageFont.truetype(font_path, 52)
         font_small = ImageFont.truetype(font_path, 52)
