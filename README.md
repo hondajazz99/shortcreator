@@ -1,103 +1,103 @@
-# README.md
 # YouTube Shorts Automation
 
 Automatically create YouTube Shorts from Telegram channel content.
 
+---
+
+## 🔑 Getting a New OAuth Refresh Token (Required for Playlist Support)
+
+Playlist management requires the **full YouTube scope**. If you previously generated a token with only `youtube.upload`, you must get a new one. Follow these exact steps:
+
+### Step-by-step via OAuth Playground
+
+1. Go to **https://developers.google.com/oauthplayground/**
+
+2. Click the **gear icon ⚙️** (top-right) → check **"Use your own OAuth credentials"**
+   - Enter your **OAuth Client ID** and **OAuth Client Secret** from Google Cloud Console
+
+3. In the left panel, find **"YouTube Data API v3"** and select this scope:
+   ```
+   https://www.googleapis.com/auth/youtube
+   ```
+   > ⚠️ Do NOT use `youtube.upload` — that scope alone blocks playlist operations.
+
+4. Click **"Authorize APIs"** → sign in with your YouTube account → allow access
+
+5. Click **"Exchange authorization code for tokens"**
+
+6. Copy the **Refresh token** value shown
+
+7. Build your `YOUTUBE_CLIENT_SECRETS` JSON secret (store in GitHub Secrets):
+   ```json
+   {
+     "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+     "client_secret": "YOUR_CLIENT_SECRET",
+     "refresh_token": "PASTE_NEW_REFRESH_TOKEN_HERE",
+     "token_uri": "https://oauth2.googleapis.com/token"
+   }
+   ```
+
+---
+
 ## Setup
 
-1. **Get Telegram API Token:**
-   - Create bot via @BotFather
-   - Get HTTP API token
+### 1. Telegram Bot Token
+- Create a bot via [@BotFather](https://t.me/BotFather)
+- Add the bot as an **admin** to your channel(s)
+- Copy the HTTP API token
 
-2. **YouTube API Setup:**
-   - Go to [Google API Console](https://console.cloud.google.com/apis/dashboard)
-   - Create project
-   - Enable YouTube Data API v3
-   - Create OAuth 2.0 credentials
-   - Download `client_secrets.json`
+### 2. YouTube API (Google Cloud Console)
+- Go to [Google API Console](https://console.cloud.google.com/apis/dashboard)
+- Create a project → enable **YouTube Data API v3**
+- Create **OAuth 2.0 credentials** (type: Web application)
+- Add `https://developers.google.com/oauthplayground` as an authorized redirect URI
+- Download or note your Client ID + Secret
 
-3. **Prepare Music:**
-   - Provide music file path or URL to permissively licensed music
-   - Music will be cached locally
+### 3. GitHub Secrets
 
-4. **Set Environment Variables:**
-   ```bash
-   export TELEGRAM_TOKEN="your_telegram_api_token"
-   export TELEGRAM_CHANNELS='["@channel1", "@channel2"]'
-   export YOUTUBE_CLIENT_SECRETS='{"client_id": "...", "client_secret": "...", "refresh_token": "..."}'
-   export TITLE_TEMPLATE="Your Title Template"
-   export DESCRIPTION="Video description"
-   export TAGS='["tag1", "tag2"]'
-   export PRIVACY_STATUS="private"
-   export DURATION=15
-   export MUSIC_OPTION="https://example.com/music.mp3"
-   export FONT_PATH="path/to/custom/font.ttf"
-RUN
+| Secret | Value |
+|--------|-------|
+| `TELEGRAM_TOKEN` | Your Telegram bot token |
+| `TELEGRAM_CHANNELS` | `["@yourchannel"]` (JSON array) |
+| `YOUTUBE_CLIENT_SECRETS` | Full JSON with client_id, client_secret, refresh_token, token_uri |
+| `PLAYLIST_ID` | `PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv` |
 
+### 4. Optional env vars (with defaults)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUBLISH_DELAY_HOURS` | `1` | Hours until scheduled publish |
+| `BRAND_HASHTAGS` | `["cryptohieuqua","cryptohieu.com"]` | Always-on hashtags |
+| `DURATION` | `15` | Minimum video duration (seconds) |
+| `PRIVACY_STATUS` | `private` | Upload privacy (always private when scheduled) |
+| `TAGS` | `["Shorts","Auto-generated"]` | Base YouTube tags |
+| `DESCRIPTION` | `"Automated YouTube Short"` | Video description prefix |
+| `MUSIC_OPTION` | *(built-in URL)* | Background music URL or file path |
+
+---
+
+## Features
+
+- **Telegram → YouTube pipeline** — fetches latest image+caption from your channels
+- **Duplicate prevention** — tracks processed message IDs in `.published_ids.json`; never uploads the same post twice
+- **Vietnamese TTS** — reads caption aloud with `vi-VN-HoaiMyNeural` voice, appending *"Đừng quên đăng ký kênh..."*
+- **Scheduled publish** — uploads as private, auto-publishes after 1 hour
+- **Playlist auto-add** — every new video is added to your playlist immediately after upload
+- **Brand hashtags** — `#cryptohieuqua #cryptohieu.com` on every video
+- **Word-synced captions** — highlighted karaoke-style words over a Ken Burns zoom
+- **Background music** — mixed at lower volume when TTS is present
+
+---
+
+## Run locally
+
+```bash
 pip install -r requirements.txt
+
+export TELEGRAM_TOKEN="..."
+export TELEGRAM_CHANNELS='["@yourchannel"]'
+export YOUTUBE_CLIENT_SECRETS='{"client_id":"...","client_secret":"...","refresh_token":"...","token_uri":"https://oauth2.googleapis.com/token"}'
+export PLAYLIST_ID="PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv"
+
 python short_creator.py
-
-GITHUB ACTIONS EXAMPLE
-name: Create YouTube Short
-
-on:
-  schedule:
-    - cron: '0 12 * * *'  # Daily at noon
-  workflow_dispatch:
-
-jobs:
-  build-and-upload:
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.8'
-        
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-        
-      - name: Run automation
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHANNELS: ${{ secrets.TELEGRAM_CHANNELS }}
-          YOUTUBE_CLIENT_SECRETS: ${{ secrets.YOUTUBE_CLIENT_SECRETS }}
-          # Add other env vars as needed
-        run: |
-          python short_creator.py
-
-MUSIC REQUIREMENTS
-Must be royalty-free with proper licensing
-Supported sources:
-Bundle music file with license documentation
-Provide URL to permissively licensed music
-
-
-This implementation provides:
-
-1. **Telegram Integration:** Fetches images and captions from specified channels
-2. **Video Creation:** Generates 9:16 vertical videos with animated captions
-3. **Audio Handling:** Adds properly licensed background music
-4. **YouTube Upload:** Resumable uploads with progress tracking
-5. **Configuration:** Flexible parameters via environment variables
-6. **Error Handling:** Comprehensive logging and error recovery
-7. **CI/CD Ready:** Designed for automated execution in GitHub Actions
-
-To use this system:
-
-1. Set up your credentials and secrets
-2. Configure your preferred settings in environment variables
-3. Run the script manually or via scheduled CI/CD
-4. Monitor the logs for execution details and troubleshooting
-
-The script will automatically:
-- Fetch the latest suitable content from your Telegram channels
-- Create an optimized YouTube Short with caption animations
-- Add properly licensed background music
-- Upload directly to YouTube with your configured metadata
-- Handle all temporary file cleanup
+```
