@@ -459,7 +459,7 @@ async def _main():
             DESCRIPTION=os.getenv("DESCRIPTION", "Automated YouTube Short"),
             TAGS=get_env_json("TAGS", '["Shorts", "Auto-generated"]'),
             PRIVACY_STATUS=os.getenv("PRIVACY_STATUS", "private"),
-            DURATION=int(os.getenv("DURATION", 45)),
+            DURATION=int(os.getenv("DURATION", 15)),
             MUSIC_OPTION=os.getenv("MUSIC_OPTION", "https://api.ttok.com/api/proxy?url=https%3A%2F%2Fcdn.pixabay.com%2Fdownload%2Faudio%2F2026%2F03%2F24%2Faudio_b3f7aa2696.mp3%3Ffilename%3Dthe_mountain-cheerful-cheerful-music-507997.mp3"),
             FONT_PATH=os.getenv("FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
             FONT_BOLD_PATH=os.getenv("FONT_BOLD_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
