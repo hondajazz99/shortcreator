@@ -1,0 +1,3 @@
+# Runtime state — managed by GitHub Actions cache
+.published_ids.json
+.telegram_offset.json
