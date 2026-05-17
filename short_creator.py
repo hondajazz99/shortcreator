@@ -54,13 +54,15 @@ class Config:
     BRAND_HASHTAGS: List[str] = field(default_factory=lambda: ["cryptohieuqua", "cryptohieu.com"])
 
     # Content
+    MAX_POSTS: int = 3                                         # Number of latest posts to process
     DURATION: int = 15
     MUSIC_OPTION: str = "https://api.ttok.com/api/proxy?url=https%3A%2F%2Fcdn.pixabay.com%2Fdownload%2Faudio%2F2026%2F03%2F24%2Faudio_b3f7aa2696.mp3%3Ffilename%3Dthe_mountain-cheerful-cheerful-music-507997.mp3"
     FONT_PATH: str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     FONT_BOLD_PATH: str = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     OUTPUT_RESOLUTION: Tuple[int, int] = field(default_factory=lambda: (1080, 1920))
     LOGO_PATH: str = "brand_logo.png"
-    PUBLISHED_IDS_FILE: str = ".published_ids.json"  # Tracks processed Telegram message IDs
+    PUBLISHED_IDS_FILE: str = ".published_ids.json"  # Tracks processed Telegram message IDs (fallback)
+    OFFSET_FILE: str = ".telegram_offset.json"        # Persists getUpdates cursor to skip old updates
 
 
 class TelegramClient:
@@ -69,24 +71,66 @@ class TelegramClient:
         self.base_url = f"https://api.telegram.org/bot{token}/"
         self.session = requests.Session()
 
-    def get_latest_image(self, channel: str, published_ids: set) -> Optional[Tuple[str, str, str]]:
-        """Return (image_url, caption, unique_message_key) for the latest unprocessed post.
-        Returns None if no new content found or all recent posts are already published."""
+    def get_latest_images(
+        self,
+        channel: str,
+        published_ids: set,
+        max_posts: int = 3,
+        offset: Optional[int] = None,
+    ) -> Tuple[List[Tuple[str, str, str]], Optional[int]]:
+        """Fetch up to `max_posts` new photo posts from `channel`.
+
+        Uses the Telegram `getUpdates` offset so already-seen updates are
+        never re-delivered by the API.  The returned `next_offset` must be
+        persisted by the caller and passed back on the next run.
+
+        Duplicate guard is two-layered:
+          1. Primary  — `offset` advances the Telegram cursor; Telegram will
+                        never send those update_ids again.
+          2. Fallback — `published_ids` (keyed by channel:message_id) catches
+                        any edge-case where the offset file was lost/reset.
+
+        Returns:
+            (posts, next_offset)
+            posts      — list of (image_url, caption, unique_key), newest-first
+            next_offset — value to store for the next run; None if unchanged
+        """
+        results: List[Tuple[str, str, str]] = []
+        max_update_id: Optional[int] = None
         try:
-            url = f"{self.base_url}getUpdates?allowed_updates=[\"channel_post\",\"message\"]"
+            params = "allowed_updates=[\"channel_post\",\"message\"]"
+            if offset is not None:
+                # Passing offset=N tells Telegram to acknowledge all updates
+                # with update_id < N and only return updates >= N.
+                params += f"&offset={offset}"
+
+            url = f"{self.base_url}getUpdates?{params}"
             updates = self.session.get(url).json()
 
-            logger.info(f"Total updates received: {len(updates.get('result', []))}")
+            logger.info(f"Total updates received: {len(updates.get('result', []))} "
+                        f"(offset={offset})")
 
             if not updates["ok"]:
                 logger.error(f"Failed to get updates: {updates}")
-                return None
+                return results, None
 
-            for update in reversed(updates.get("result", [])):
+            all_updates = updates.get("result", [])
+
+            # Track the highest update_id seen so we can advance the cursor
+            for update in all_updates:
+                uid = update.get("update_id", 0)
+                if max_update_id is None or uid > max_update_id:
+                    max_update_id = uid
+
+            # Walk newest-first to collect up to max_posts qualifying posts
+            for update in reversed(all_updates):
+                if len(results) >= max_posts:
+                    break
+
                 post = update.get("channel_post") or update.get("message", {})
 
                 sender = post.get("sender_chat", {}).get("username", "none")
-                chat = post.get("chat", {}).get("username", "none")
+                chat   = post.get("chat", {}).get("username", "none")
                 has_photo = "photo" in post
                 logger.info(f"Update: sender_chat=@{sender}, chat=@{chat}, has_photo={has_photo}")
 
@@ -97,28 +141,31 @@ class TelegramClient:
                 logger.info(f"Comparing: '{chat_username}' == '{channel}'")
 
                 if chat_username == channel and has_photo:
-                    # Build a stable unique key: channel + message_id
                     message_id = str(post.get("message_id", update.get("update_id", "")))
                     unique_key = f"{channel}:{message_id}"
 
+                    # Fallback duplicate guard
                     if unique_key in published_ids:
                         logger.info(f"Skipping already-published post: {unique_key}")
-                        continue  # try next older post
+                        continue
 
                     photo = max(post["photo"], key=lambda x: x["file_size"])
                     file_resp = self.session.get(
                         f"{self.base_url}getFile?file_id={photo['file_id']}"
                     ).json()
                     file_path = file_resp["result"]["file_path"]
-                    caption = post.get("caption", "No caption")
-                    return (
-                        f"https://api.telegram.org/file/bot{self.token}/{file_path}",
-                        caption,
-                        unique_key
-                    )
+                    caption   = post.get("caption", "No caption")
+                    image_url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+                    results.append((image_url, caption, unique_key))
+                    logger.info(f"Queued post {unique_key} (total queued: {len(results)})")
+
         except Exception as e:
             logger.error(f"Error fetching telegram content: {str(e)}")
-        return None
+
+        # next_offset = max_update_id + 1 tells Telegram to never re-send
+        # any of the updates we just processed.
+        next_offset = (max_update_id + 1) if max_update_id is not None else None
+        return results, next_offset
 
 
 class VideoCreator:
@@ -284,10 +331,10 @@ class VideoCreator:
 
     def _apply_zoom(self, img: Image.Image, progress: float) -> Image.Image:
         """Apply smooth zoom-in then zoom-out (Ken Burns effect).
-        progress: 0.0 → 1.0 over the full video duration.
+        progress: 0.0 -> 1.0 over the full video duration.
         Zoom peaks at the midpoint, ranging from 1.0x to 1.15x scale.
         """
-        # Triangle wave: 0→1→0 mapped to zoom 1.0→1.15→1.0
+        # Triangle wave: 0->1->0 mapped to zoom 1.0->1.15->1.0
         t = 1.0 - abs(progress * 2 - 1.0)   # 0..1..0
         zoom = 1.0 + 0.15 * t
 
@@ -301,10 +348,11 @@ class VideoCreator:
         cropped = img.crop((left, top, left + new_w, top + new_h))
         return cropped.resize((w, h), Image.LANCZOS)
 
-    async def create_short(self, image_url: str, caption: str) -> Optional[Path]:
-        img_path = Path("temp_image.jpg")
+    async def create_short(self, image_url: str, caption: str, index: int = 0) -> Optional[Path]:
+        img_path = Path(f"temp_image_{index}.jpg")
         tts_path = Path("temp_tts.mp3")
         tts_fast_path = Path("temp_tts_fast.mp3")
+        output_path = Path(f"output_short_{index}.mp4")
         try:
             # Download and process image
             img_data = requests.get(image_url).content
@@ -326,13 +374,6 @@ class VideoCreator:
                 ], check=True, capture_output=True)
                 tts_audio = mp.AudioFileClip(str(tts_fast_path))
 
-                # Adjust word timings for x1.25 speed
-                #word_timings = [{
-                #    "word": w["word"],
-                #    "start": w["start"] / 1.25,
-                #    "duration": w["duration"] / 1.25
-                #} for w in word_timings]
-
             tts_duration = tts_audio.duration if tts_audio else 0
             video_duration = max(self.config.DURATION, tts_duration + 1.0)
 
@@ -341,7 +382,7 @@ class VideoCreator:
             total_frames = int(video_duration * fps)
             frames = []
 
-            logger.info(f"Generating {total_frames} synced caption frames...")
+            logger.info(f"[Video {index+1}] Generating {total_frames} synced caption frames...")
             for frame_idx in range(total_frames):
                 current_time = frame_idx / fps
                 progress = frame_idx / max(total_frames - 1, 1)
@@ -361,13 +402,12 @@ class VideoCreator:
                     frames.append(frame)
                 except Exception as e:
                     logger.error(f"Frame {frame_idx} failed: {str(e)}")
-                    # Fallback: use plain image without caption
                     frames.append(np.array(img.convert("RGB")))
 
             if not frames:
                 logger.error("No frames generated")
                 return None
-            logger.info(f"Generated {len(frames)} frames successfully")
+            logger.info(f"[Video {index+1}] Generated {len(frames)} frames successfully")
 
             # Create video from frames
             video = mp.ImageSequenceClip(frames, fps=fps)
@@ -382,14 +422,12 @@ class VideoCreator:
 
                 bg_audio = mp.AudioFileClip(str(music_path))
 
-                # Loop music if shorter than video duration
                 if bg_audio.duration < video_duration:
                     loops = int(video_duration / bg_audio.duration) + 1
                     bg_audio = mp.concatenate_audioclips([bg_audio] * loops)
                 bg_audio = bg_audio.subclip(0, video_duration)
                 bg_audio = bg_audio.audio_fadein(1.0).audio_fadeout(1.5)
 
-                # Lower bg music when TTS is present
                 bg_volume = 0.3 if tts_audio else 0.8
                 bg_audio = bg_audio.volumex(bg_volume)
 
@@ -403,7 +441,6 @@ class VideoCreator:
                 video = video.set_audio(tts_audio)
 
             # Save video
-            output_path = Path("output_short.mp4")
             video.write_videofile(
                 str(output_path),
                 fps=fps,
@@ -414,7 +451,7 @@ class VideoCreator:
             return output_path
 
         except Exception as e:
-            logger.error(f"Video creation failed: {str(e)}")
+            logger.error(f"[Video {index+1}] Video creation failed: {str(e)}")
             return None
         finally:
             for f in [img_path, tts_path, tts_fast_path]:
@@ -426,7 +463,23 @@ class YouTubeUploader:
     def __init__(self, credentials: dict):
         self.credentials = credentials
 
-    def upload_short(self, video_path: Path, config: Config, caption: str = ""):
+    def upload_short(
+        self,
+        video_path: Path,
+        config: Config,
+        caption: str = "",
+        all_captions: Optional[List[str]] = None,
+        publish_delay_hours: int = 1,
+    ):
+        """Upload a single Short to YouTube.
+
+        Args:
+            video_path: Path to the video file.
+            config: Pipeline configuration.
+            caption: Caption for this specific video (used for title + tags).
+            all_captions: All captions from the batch run -- included in the description.
+            publish_delay_hours: Hours from now when the video will go public.
+        """
         try:
             creds = Credentials.from_authorized_user_info(self.credentials)
             youtube = build("youtube", "v3", credentials=creds)
@@ -437,26 +490,35 @@ class YouTubeUploader:
                 for word in caption.split()
                 if len(word.strip("#.,!?")) > 3
             ]
-            # Merge brand hashtags (always present) + caption tags
-            brand_tags = config.BRAND_HASHTAGS  # ["cryptohieuqua", "cryptohieu.com"]
+            brand_tags = config.BRAND_HASHTAGS
             all_tags = config.TAGS + brand_tags + caption_tags
 
-            # Build hashtag string: brand hashtags first, then top caption tags
             brand_hashtag_str = " ".join(f"#{t}" for t in brand_tags)
             caption_hashtag_str = " ".join(f"#{t}" for t in caption_tags[:5])
             hashtags = f"{brand_hashtag_str} {caption_hashtag_str}".strip()
 
-            # Title: "Video Short + caption + datetime"
+            # Title
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             title = f"Video Short {caption[:50]} {date_str}"
 
-            # Description with hashtags
-            description = f"{config.DESCRIPTION}\n\n{hashtags}\n#Shorts\n\ncryptohieu.com"
+            # Build description: base description + all captions block + hashtags
+            captions_block = ""
+            if all_captions:
+                numbered = "\n".join(
+                    f"{i+1}. {cap}" for i, cap in enumerate(all_captions)
+                )
+                captions_block = f"\n\n📋 Nội dung:\n{numbered}"
 
-            # Schedule publish time: now + PUBLISH_DELAY_HOURS
-            publish_at = (datetime.now(timezone.utc) + timedelta(hours=config.PUBLISH_DELAY_HOURS)).strftime(
-                "%Y-%m-%dT%H:%M:%S.000Z"
+            description = (
+                f"{config.DESCRIPTION}"
+                f"{captions_block}"
+                f"\n\n{hashtags}\n#Shorts\n\ncryptohieu.com"
             )
+
+            # Schedule publish time
+            publish_at = (
+                datetime.now(timezone.utc) + timedelta(hours=publish_delay_hours)
+            ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
             logger.info(f"Scheduling publish at: {publish_at} UTC")
 
             body = {
@@ -467,17 +529,13 @@ class YouTubeUploader:
                     "categoryId": "22"
                 },
                 "status": {
-                    "privacyStatus": "private",         # must be private for scheduled
-                    "publishAt": publish_at,             # schedule publish time
+                    "privacyStatus": "private",
+                    "publishAt": publish_at,
                     "selfDeclaredMadeForKids": False
                 }
             }
 
-            media = MediaFileUpload(
-                str(video_path),
-                chunksize=-1,
-                resumable=True
-            )
+            media = MediaFileUpload(str(video_path), chunksize=-1, resumable=True)
 
             request = youtube.videos().insert(
                 part=",".join(body.keys()),
@@ -532,6 +590,7 @@ async def _main():
             PLAYLIST_ID=os.getenv("PLAYLIST_ID", "PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv"),
             PUBLISH_DELAY_HOURS=int(os.getenv("PUBLISH_DELAY_HOURS", 1)),
             BRAND_HASHTAGS=get_env_json("BRAND_HASHTAGS", '["cryptohieuqua", "cryptohieu.com"]'),
+            MAX_POSTS=int(os.getenv("MAX_POSTS", 3)),
             DURATION=int(os.getenv("DURATION", 15)),
             MUSIC_OPTION=os.getenv("MUSIC_OPTION", "https://api.ttok.com/api/proxy?url=https%3A%2F%2Fcdn.pixabay.com%2Fdownload%2Faudio%2F2026%2F03%2F24%2Faudio_b3f7aa2696.mp3%3Ffilename%3Dthe_mountain-cheerful-cheerful-music-507997.mp3"),
             FONT_PATH=os.getenv("FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
@@ -546,7 +605,9 @@ async def _main():
         if not config.TELEGRAM_CHANNELS:
             raise ValueError("At least one TELEGRAM_CHANNEL must be specified")
 
-        # Load published IDs for duplicate prevention
+        # -- Load duplicate-prevention state --
+
+        # Fallback guard: channel:message_id keys of posts already turned into videos
         published_ids_file = Path(config.PUBLISHED_IDS_FILE)
         published_ids: set = set()
         if published_ids_file.exists():
@@ -556,35 +617,78 @@ async def _main():
             except Exception as e:
                 logger.warning(f"Could not load published IDs: {e}")
 
-        # Fetch content from Telegram (skip already-published posts)
+        # Primary guard: getUpdates offset — tells Telegram never to re-send
+        # updates we have already seen.  Stored per-channel so multiple channels
+        # don't share a cursor.
+        offset_file = Path(config.OFFSET_FILE)
+        offset_state: dict = {}   # {channel: next_offset_int}
+        if offset_file.exists():
+            try:
+                offset_state = json.loads(offset_file.read_text())
+                logger.info(f"Loaded getUpdates offsets: {offset_state}")
+            except Exception as e:
+                logger.warning(f"Could not load offset state: {e}")
+
+        def save_offset_state() -> None:
+            try:
+                offset_file.write_text(json.dumps(offset_state))
+            except Exception as e:
+                logger.warning(f"Could not save offset state: {e}")
+
+        # -- Fetch up to MAX_POSTS latest posts from Telegram --
         telegram = TelegramClient(config.TELEGRAM_TOKEN)
-        content = None
-        caption = ""
-        image_url = ""
-        unique_key = ""
+        posts: List[Tuple[str, str, str]] = []
 
         for channel in config.TELEGRAM_CHANNELS:
-            content = telegram.get_latest_image(channel, published_ids)
-            if content:
-                image_url, caption, unique_key = content
+            current_offset = offset_state.get(channel)
+            channel_posts, next_offset = telegram.get_latest_images(
+                channel, published_ids, max_posts=config.MAX_POSTS,
+                offset=current_offset,
+            )
+            # Always advance the cursor even if no qualifying posts were found,
+            # so we never re-process non-photo updates either.
+            if next_offset is not None:
+                offset_state[channel] = next_offset
+                save_offset_state()
+                logger.info(f"Advanced getUpdates offset for {channel} -> {next_offset}")
+
+            posts.extend(channel_posts)
+            if len(posts) >= config.MAX_POSTS:
+                posts = posts[: config.MAX_POSTS]
                 break
 
-        if not content:
+        if not posts:
             logger.error("No new suitable content found (all recent posts already published or no photos)")
             return
 
-        # Create video
+        logger.info(f"Found {len(posts)} new post(s) to process")
+
+        # Collect all captions upfront -- every video description will include all of them
+        all_captions = [caption for _, caption, _ in posts]
+
+        # -- Process each post sequentially --
         creator = VideoCreator(config)
-        video_path = await creator.create_short(image_url, caption)
-        if not video_path or not video_path.exists():
-            raise RuntimeError("Video creation failed")
-
-        # Upload to YouTube
         uploader = YouTubeUploader(config.YOUTUBE_CLIENT_SECRETS)
-        uploader.upload_short(video_path, config, caption=caption)
 
-        # Mark post as published to prevent future duplicates
-        if unique_key:
+        for index, (image_url, caption, unique_key) in enumerate(posts):
+            logger.info(f"=== Processing post {index+1}/{len(posts)}: {unique_key} ===")
+
+            video_path = await creator.create_short(image_url, caption, index=index)
+            if not video_path or not video_path.exists():
+                logger.error(f"Video creation failed for post {index+1}, skipping upload")
+                continue
+
+            # Each video is scheduled 1 extra hour apart so they don't all go live at once
+            publish_offset = config.PUBLISH_DELAY_HOURS + index
+            uploader.upload_short(
+                video_path,
+                config,
+                caption=caption,
+                all_captions=all_captions,
+                publish_delay_hours=publish_offset,
+            )
+
+            # Mark as published immediately after successful upload
             published_ids.add(unique_key)
             try:
                 published_ids_file.write_text(json.dumps(list(published_ids)))
@@ -592,10 +696,12 @@ async def _main():
             except Exception as e:
                 logger.warning(f"Could not save published IDs: {e}")
 
-        # Cleanup
-        if video_path.exists():
-            video_path.unlink()
-            logger.info("Temporary files cleaned up")
+            # Cleanup video file
+            if video_path.exists():
+                video_path.unlink()
+                logger.info(f"Cleaned up {video_path}")
+
+        logger.info(f"Pipeline complete. Processed {len(posts)} video(s).")
 
     except Exception as e:
         logger.exception("Fatal error in main process")
