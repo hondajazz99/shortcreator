@@ -69,56 +69,61 @@ class TelegramClient:
         self.base_url = f"https://api.telegram.org/bot{token}/"
         self.session = requests.Session()
 
-    def get_latest_image(self, channel: str, published_ids: set) -> Optional[Tuple[str, str, str]]:
-        """Return (image_url, caption, unique_message_key) for the latest unprocessed post.
-        Returns None if no new content found or all recent posts are already published."""
+    def get_latest_images(
+        self, channel: str, published_ids: set, max_posts: int = 10
+    ) -> List[Tuple[str, str, str]]:
+        """Return a list of (image_url, caption, unique_key) for up to *max_posts*
+        unprocessed photo posts from *channel*, newest-first."""
+        results: List[Tuple[str, str, str]] = []
         try:
             url = f"{self.base_url}getUpdates?allowed_updates=[\"channel_post\",\"message\"]"
             updates = self.session.get(url).json()
-
             logger.info(f"Total updates received: {len(updates.get('result', []))}")
-
             if not updates["ok"]:
                 logger.error(f"Failed to get updates: {updates}")
-                return None
-
+                return results
             for update in reversed(updates.get("result", [])):
+                if len(results) >= max_posts:
+                    break
                 post = update.get("channel_post") or update.get("message", {})
-
                 sender = post.get("sender_chat", {}).get("username", "none")
-                chat = post.get("chat", {}).get("username", "none")
+                chat_obj = post.get("chat", {}).get("username", "none")
                 has_photo = "photo" in post
-                logger.info(f"Update: sender_chat=@{sender}, chat=@{chat}, has_photo={has_photo}")
-
+                logger.info(f"Update: sender_chat=@{sender}, chat=@{chat_obj}, has_photo={has_photo}")
                 chat_username = "@" + (
                     post.get("sender_chat", {}).get("username") or
                     post.get("chat", {}).get("username", "")
                 )
                 logger.info(f"Comparing: '{chat_username}' == '{channel}'")
-
                 if chat_username == channel and has_photo:
-                    # Build a stable unique key: channel + message_id
                     message_id = str(post.get("message_id", update.get("update_id", "")))
                     unique_key = f"{channel}:{message_id}"
-
                     if unique_key in published_ids:
                         logger.info(f"Skipping already-published post: {unique_key}")
-                        continue  # try next older post
-
-                    photo = max(post["photo"], key=lambda x: x["file_size"])
-                    file_resp = self.session.get(
-                        f"{self.base_url}getFile?file_id={photo['file_id']}"
-                    ).json()
-                    file_path = file_resp["result"]["file_path"]
-                    caption = post.get("caption", "No caption")
-                    return (
-                        f"https://api.telegram.org/file/bot{self.token}/{file_path}",
-                        caption,
-                        unique_key
-                    )
+                        continue
+                    try:
+                        photo = max(post["photo"], key=lambda x: x["file_size"])
+                        file_resp = self.session.get(
+                            f"{self.base_url}getFile?file_id={photo['file_id']}"
+                        ).json()
+                        file_path = file_resp["result"]["file_path"]
+                        caption = post.get("caption", "No caption")
+                        results.append((
+                            f"https://api.telegram.org/file/bot{self.token}/{file_path}",
+                            caption,
+                            unique_key,
+                        ))
+                        logger.info(f"Queued post {unique_key} ({len(results)}/{max_posts})")
+                    except Exception as inner_e:
+                        logger.error(f"Error resolving file for {unique_key}: {inner_e}")
         except Exception as e:
             logger.error(f"Error fetching telegram content: {str(e)}")
-        return None
+        return results
+
+    def get_latest_image(self, channel: str, published_ids: set) -> Optional[Tuple[str, str, str]]:
+        """Backward-compatible wrapper — returns only the single newest unprocessed photo post."""
+        results = self.get_latest_images(channel, published_ids, max_posts=1)
+        return results[0] if results else None
 
 
 class VideoCreator:
@@ -256,6 +261,18 @@ class VideoCreator:
                 # Center horizontally, place in lower third
                 x = (img_w - text_w) // 2
                 y = int(img_h * 0.75)
+
+                # Grey semi-transparent rounded-rect background behind the word
+                bg_x0 = x - padding_x
+                bg_y0 = y - padding_y
+                bg_x1 = x + text_w + padding_x
+                bg_y1 = y + text_h + padding_y
+                corner_r = 20
+                draw.rounded_rectangle(
+                    [bg_x0, bg_y0, bg_x1, bg_y1],
+                    radius=corner_r,
+                    fill=(80, 80, 80, 160)   # grey, ~63 % opaque
+                )
 
                 # Dark outline/border around text only (drawn at offsets in all directions)
                 outline_color = (0, 0, 0, 255)
@@ -450,8 +467,9 @@ class YouTubeUploader:
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             title = f"Video Short {caption[:50]} {date_str}"
 
-            # Description with hashtags
-            description = f"{config.DESCRIPTION}\n\n{hashtags}\n#Shorts\n\ncryptohieu.com"
+            # Description: base description + original caption + hashtags
+            caption_section = f"\n\n📌 {caption.strip()}" if caption and caption != "No caption" else ""
+            description = f"{config.DESCRIPTION}{caption_section}\n\n{hashtags}\n#Shorts\n\ncryptohieu.com"
 
             # Schedule publish time: now + PUBLISH_DELAY_HOURS
             publish_at = (datetime.now(timezone.utc) + timedelta(hours=config.PUBLISH_DELAY_HOURS)).strftime(
@@ -556,46 +574,48 @@ async def _main():
             except Exception as e:
                 logger.warning(f"Could not load published IDs: {e}")
 
-        # Fetch content from Telegram (skip already-published posts)
+        # Fetch up to MAX_TELEGRAM_POSTS new photos from all configured Telegram channels
         telegram = TelegramClient(config.TELEGRAM_TOKEN)
-        content = None
-        caption = ""
-        image_url = ""
-        unique_key = ""
-
+        MAX_POSTS = int(os.getenv("MAX_TELEGRAM_POSTS", 10))
+        all_posts: List[Tuple[str, str, str]] = []
         for channel in config.TELEGRAM_CHANNELS:
-            content = telegram.get_latest_image(channel, published_ids)
-            if content:
-                image_url, caption, unique_key = content
+            posts = telegram.get_latest_images(channel, published_ids, max_posts=MAX_POSTS)
+            all_posts.extend(posts)
+            if len(all_posts) >= MAX_POSTS:
                 break
 
-        if not content:
+        if not all_posts:
             logger.error("No new suitable content found (all recent posts already published or no photos)")
             return
 
-        # Create video
+        logger.info(f"Processing {len(all_posts)} new Telegram post(s)...")
         creator = VideoCreator(config)
-        video_path = await creator.create_short(image_url, caption)
-        if not video_path or not video_path.exists():
-            raise RuntimeError("Video creation failed")
-
-        # Upload to YouTube
         uploader = YouTubeUploader(config.YOUTUBE_CLIENT_SECRETS)
-        uploader.upload_short(video_path, config, caption=caption)
 
-        # Mark post as published to prevent future duplicates
-        if unique_key:
-            published_ids.add(unique_key)
+        for image_url, caption, unique_key in all_posts:
             try:
-                published_ids_file.write_text(json.dumps(list(published_ids)))
-                logger.info(f"Saved published ID: {unique_key}")
-            except Exception as e:
-                logger.warning(f"Could not save published IDs: {e}")
+                logger.info(f"Creating video for post: {unique_key}")
+                video_path = await creator.create_short(image_url, caption)
+                if not video_path or not video_path.exists():
+                    logger.error(f"Video creation failed for {unique_key}, skipping")
+                    continue
 
-        # Cleanup
-        if video_path.exists():
-            video_path.unlink()
-            logger.info("Temporary files cleaned up")
+                uploader.upload_short(video_path, config, caption=caption)
+
+                # Mark as published immediately after a successful upload
+                published_ids.add(unique_key)
+                try:
+                    published_ids_file.write_text(json.dumps(list(published_ids)))
+                    logger.info(f"Saved published ID: {unique_key}")
+                except Exception as save_err:
+                    logger.warning(f"Could not save published IDs: {save_err}")
+
+                if video_path.exists():
+                    video_path.unlink()
+                    logger.info(f"Cleaned up temp video for {unique_key}")
+
+            except Exception as post_err:
+                logger.error(f"Error processing post {unique_key}: {post_err}")
 
     except Exception as e:
         logger.exception("Fatal error in main process")
