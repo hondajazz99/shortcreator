@@ -1,4 +1,5 @@
 # short_creator.py
+import argparse
 import asyncio
 import os
 import json
@@ -8,7 +9,7 @@ import requests
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -166,6 +167,48 @@ class TelegramClient:
         # any of the updates we just processed.
         next_offset = (max_update_id + 1) if max_update_id is not None else None
         return results, next_offset
+
+
+    def reset_offset(self) -> Optional[int]:
+        """Acknowledge ALL pending updates on Telegram's server and return the new offset.
+
+        Call this when local state files have been deleted so the server-side
+        cursor is advanced past everything already delivered.  The caller should
+        persist the returned value as the new offset before the next normal run.
+
+        Returns the new next_offset value, or None on failure.
+        """
+        try:
+            # Fetch whatever is currently pending (no offset = from the beginning of the window)
+            url = f"{self.base_url}getUpdates?allowed_updates=[\"channel_post\",\"message\"]"
+            updates = self.session.get(url).json()
+            if not updates.get("ok"):
+                logger.error(f"reset_offset: getUpdates failed: {updates}")
+                return None
+
+            all_updates = updates.get("result", [])
+            if not all_updates:
+                logger.info("reset_offset: no pending updates on Telegram's server — already up-to-date")
+                return None
+
+            max_update_id = max(u["update_id"] for u in all_updates)
+            next_offset = max_update_id + 1
+
+            # ACK everything by calling getUpdates with offset = next_offset
+            ack_url = (
+                f"{self.base_url}getUpdates"
+                f"?allowed_updates=[\"channel_post\",\"message\"]"
+                f"&offset={next_offset}"
+            )
+            self.session.get(ack_url)
+            logger.info(
+                f"reset_offset: acknowledged {len(all_updates)} update(s), "
+                f"new offset={next_offset}"
+            )
+            return next_offset
+        except Exception as e:
+            logger.error(f"reset_offset failed: {e}")
+            return None
 
 
 class VideoCreator:
@@ -576,7 +619,7 @@ class YouTubeUploader:
             logger.error(f"Upload failed: {str(e)}")
 
 
-async def _main():
+async def _main(reset: bool = False):
     try:
         # Load configuration
         config = Config(
@@ -607,8 +650,45 @@ async def _main():
 
         # -- Load duplicate-prevention state --
 
-        # Fallback guard: channel:message_id keys of posts already turned into videos
         published_ids_file = Path(config.PUBLISHED_IDS_FILE)
+        offset_file = Path(config.OFFSET_FILE)
+        telegram = TelegramClient(config.TELEGRAM_TOKEN)
+
+        # ------------------------------------------------------------------ #
+        # --reset flag: acknowledge all pending Telegram updates and wipe     #
+        # local state so the NEXT run starts cleanly from "now".              #
+        # ------------------------------------------------------------------ #
+        if reset:
+            logger.info("=== RESET MODE: clearing local state and acknowledging Telegram cursor ===")
+            new_offset_state: dict = {}
+            for channel in config.TELEGRAM_CHANNELS:
+                new_offset = telegram.reset_offset()
+                if new_offset is not None:
+                    new_offset_state[channel] = new_offset
+                    logger.info(f"  {channel} offset reset -> {new_offset}")
+                else:
+                    logger.warning(f"  {channel}: could not reset offset (no updates pending?)")
+            try:
+                offset_file.write_text(json.dumps(new_offset_state))
+                logger.info(f"Saved fresh offset state: {new_offset_state}")
+            except Exception as e:
+                logger.warning(f"Could not save offset state after reset: {e}")
+            try:
+                published_ids_file.write_text(json.dumps([]))
+                logger.info("Cleared published IDs file")
+            except Exception as e:
+                logger.warning(f"Could not clear published IDs: {e}")
+            logger.info("Reset complete. Re-run WITHOUT --reset to process new posts.")
+            return
+
+        # ------------------------------------------------------------------ #
+        # Auto-detect missing state files (e.g. after accidental deletion).   #
+        # When offset file is absent, the Telegram server cursor is unknown.  #
+        # We acknowledge everything pending now and ask the user to re-run.   #
+        # ------------------------------------------------------------------ #
+        state_was_missing = not offset_file.exists()
+
+        # Fallback guard: channel:message_id keys of posts already turned into videos
         published_ids: set = set()
         if published_ids_file.exists():
             try:
@@ -620,7 +700,6 @@ async def _main():
         # Primary guard: getUpdates offset — tells Telegram never to re-send
         # updates we have already seen.  Stored per-channel so multiple channels
         # don't share a cursor.
-        offset_file = Path(config.OFFSET_FILE)
         offset_state: dict = {}   # {channel: next_offset_int}
         if offset_file.exists():
             try:
@@ -629,6 +708,28 @@ async def _main():
             except Exception as e:
                 logger.warning(f"Could not load offset state: {e}")
 
+        if state_was_missing:
+            logger.warning(
+                "Offset file was missing — this usually means the JSON files were deleted. "
+                "Acknowledging all current Telegram updates and saving a fresh cursor. "
+                "Re-run the script to process only NEW posts going forward."
+            )
+            fresh_state: dict = {}
+            for channel in config.TELEGRAM_CHANNELS:
+                new_offset = telegram.reset_offset()
+                if new_offset is not None:
+                    fresh_state[channel] = new_offset
+            try:
+                offset_file.write_text(json.dumps(fresh_state))
+                logger.info(f"Saved fresh offset state after auto-reset: {fresh_state}")
+            except Exception as e:
+                logger.warning(f"Could not save offset state: {e}")
+            logger.error(
+                "No new suitable content found — offset file was just initialised. "
+                "Post new content to your Telegram channel, then re-run the script."
+            )
+            return
+
         def save_offset_state() -> None:
             try:
                 offset_file.write_text(json.dumps(offset_state))
@@ -636,7 +737,6 @@ async def _main():
                 logger.warning(f"Could not save offset state: {e}")
 
         # -- Fetch up to MAX_POSTS latest posts from Telegram --
-        telegram = TelegramClient(config.TELEGRAM_TOKEN)
         posts: List[Tuple[str, str, str]] = []
 
         for channel in config.TELEGRAM_CHANNELS:
@@ -709,7 +809,18 @@ async def _main():
 
 
 def main():
-    asyncio.run(_main())
+    parser = argparse.ArgumentParser(description="Telegram → YouTube Shorts pipeline")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Acknowledge all pending Telegram updates and clear local state files. "
+            "Use this after manually deleting .published_ids.json or .telegram_offset.json "
+            "so the next normal run starts from 'now' rather than re-processing old posts."
+        ),
+    )
+    args = parser.parse_args()
+    asyncio.run(_main(reset=args.reset))
 
 
 if __name__ == "__main__":
