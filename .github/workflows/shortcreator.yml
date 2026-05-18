@@ -36,7 +36,7 @@ jobs:
           TELEGRAM_CHANNELS: ${{ secrets.TELEGRAM_CHANNELS }}
           YOUTUBE_CLIENT_SECRETS: ${{ secrets.YOUTUBE_CLIENT_SECRETS }}
         run: |
-          python short_creator.py --reset
+          python short_creator.py
           
       - name: Save state files back to repo
         run: |
