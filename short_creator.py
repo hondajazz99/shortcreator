@@ -8,7 +8,7 @@ import requests
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -54,7 +54,6 @@ class Config:
     BRAND_HASHTAGS: List[str] = field(default_factory=lambda: ["cryptohieuqua", "cryptohieu.com"])
 
     # Content
-    MAX_POSTS: int = 3                                         # Number of latest posts to process
     DURATION: int = 15
     MUSIC_OPTION: str = "CigSwaag-JinglePunks.mp3"
     FONT_PATH: str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -70,40 +69,24 @@ class TelegramClient:
         self.base_url = f"https://api.telegram.org/bot{token}/"
         self.session = requests.Session()
 
-    def get_latest_images(
-        self,
-        channel: str,
-        published_ids: set,
-        max_posts: int = 3,
-    ) -> List[Tuple[str, str, str]]:
-        """Fetch up to `max_posts` new photo posts from `channel`.
-
-        Duplicate prevention is handled entirely by `published_ids`
-        (keyed by channel:message_id).  No offset file is used — getUpdates
-        returns whatever is in Telegram's ~24-hour rolling window and we
-        filter out anything already published locally.
-
-        Returns:
-            list of (image_url, caption, unique_key), oldest-first, newest max_posts entries
-        """
-        candidates: List[Tuple[str, str, str]] = []
+    def get_latest_image(self, channel: str, published_ids: set) -> Optional[Tuple[str, str, str]]:
+        """Return (image_url, caption, unique_message_key) for the latest unprocessed post.
+        Returns None if no new content found or all recent posts are already published."""
         try:
             url = f"{self.base_url}getUpdates?allowed_updates=[\"channel_post\",\"message\"]"
             updates = self.session.get(url).json()
 
             logger.info(f"Total updates received: {len(updates.get('result', []))}")
 
-            if not updates.get("ok"):
+            if not updates["ok"]:
                 logger.error(f"Failed to get updates: {updates}")
-                return candidates
+                return None
 
-            all_updates = updates.get("result", [])
-
-            for update in all_updates:
+            for update in reversed(updates.get("result", [])):
                 post = update.get("channel_post") or update.get("message", {})
 
                 sender = post.get("sender_chat", {}).get("username", "none")
-                chat   = post.get("chat", {}).get("username", "none")
+                chat = post.get("chat", {}).get("username", "none")
                 has_photo = "photo" in post
                 logger.info(f"Update: sender_chat=@{sender}, chat=@{chat}, has_photo={has_photo}")
 
@@ -114,30 +97,28 @@ class TelegramClient:
                 logger.info(f"Comparing: '{chat_username}' == '{channel}'")
 
                 if chat_username == channel and has_photo:
+                    # Build a stable unique key: channel + message_id
                     message_id = str(post.get("message_id", update.get("update_id", "")))
                     unique_key = f"{channel}:{message_id}"
 
                     if unique_key in published_ids:
                         logger.info(f"Skipping already-published post: {unique_key}")
-                        continue
+                        continue  # try next older post
 
                     photo = max(post["photo"], key=lambda x: x["file_size"])
                     file_resp = self.session.get(
                         f"{self.base_url}getFile?file_id={photo['file_id']}"
                     ).json()
                     file_path = file_resp["result"]["file_path"]
-                    caption   = post.get("caption", "No caption")
-                    image_url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
-                    candidates.append((image_url, caption, unique_key))
-                    logger.info(f"Found candidate {unique_key} (total: {len(candidates)})")
-
+                    caption = post.get("caption", "No caption")
+                    return (
+                        f"https://api.telegram.org/file/bot{self.token}/{file_path}",
+                        caption,
+                        unique_key
+                    )
         except Exception as e:
             logger.error(f"Error fetching telegram content: {str(e)}")
-
-        # Return the newest max_posts entries
-        results = candidates[-max_posts:] if len(candidates) > max_posts else candidates
-        logger.info(f"Returning {len(results)} post(s) from {len(candidates)} candidate(s)")
-        return results
+        return None
 
 
 class VideoCreator:
@@ -225,7 +206,7 @@ class VideoCreator:
                     {
                         "word": word,
                         "start": round(i * per_word, 3),
-                        "duration": round(per_word * 0.9, 3)
+                        "duration": round(per_word * 0.85, 3)
                     }
                     for i, word in enumerate(words)
                 ]
@@ -303,10 +284,10 @@ class VideoCreator:
 
     def _apply_zoom(self, img: Image.Image, progress: float) -> Image.Image:
         """Apply smooth zoom-in then zoom-out (Ken Burns effect).
-        progress: 0.0 -> 1.0 over the full video duration.
+        progress: 0.0 → 1.0 over the full video duration.
         Zoom peaks at the midpoint, ranging from 1.0x to 1.15x scale.
         """
-        # Triangle wave: 0->1->0 mapped to zoom 1.0->1.15->1.0
+        # Triangle wave: 0→1→0 mapped to zoom 1.0→1.15→1.0
         t = 1.0 - abs(progress * 2 - 1.0)   # 0..1..0
         zoom = 1.0 + 0.15 * t
 
@@ -320,11 +301,10 @@ class VideoCreator:
         cropped = img.crop((left, top, left + new_w, top + new_h))
         return cropped.resize((w, h), Image.LANCZOS)
 
-    async def create_short(self, image_url: str, caption: str, index: int = 0) -> Optional[Path]:
-        img_path = Path(f"temp_image_{index}.jpg")
+    async def create_short(self, image_url: str, caption: str) -> Optional[Path]:
+        img_path = Path("temp_image.jpg")
         tts_path = Path("temp_tts.mp3")
         tts_fast_path = Path("temp_tts_fast.mp3")
-        output_path = Path(f"output_short_{index}.mp4")
         try:
             # Download and process image
             img_data = requests.get(image_url).content
@@ -346,6 +326,13 @@ class VideoCreator:
                 ], check=True, capture_output=True)
                 tts_audio = mp.AudioFileClip(str(tts_fast_path))
 
+                # Adjust word timings for x1.25 speed
+                #word_timings = [{
+                #    "word": w["word"],
+                #    "start": w["start"] / 1.25,
+                #    "duration": w["duration"] / 1.25
+                #} for w in word_timings]
+
             tts_duration = tts_audio.duration if tts_audio else 0
             video_duration = max(self.config.DURATION, tts_duration + 1.0)
 
@@ -354,7 +341,7 @@ class VideoCreator:
             total_frames = int(video_duration * fps)
             frames = []
 
-            logger.info(f"[Video {index+1}] Generating {total_frames} synced caption frames...")
+            logger.info(f"Generating {total_frames} synced caption frames...")
             for frame_idx in range(total_frames):
                 current_time = frame_idx / fps
                 progress = frame_idx / max(total_frames - 1, 1)
@@ -374,12 +361,13 @@ class VideoCreator:
                     frames.append(frame)
                 except Exception as e:
                     logger.error(f"Frame {frame_idx} failed: {str(e)}")
+                    # Fallback: use plain image without caption
                     frames.append(np.array(img.convert("RGB")))
 
             if not frames:
                 logger.error("No frames generated")
                 return None
-            logger.info(f"[Video {index+1}] Generated {len(frames)} frames successfully")
+            logger.info(f"Generated {len(frames)} frames successfully")
 
             # Create video from frames
             video = mp.ImageSequenceClip(frames, fps=fps)
@@ -394,12 +382,14 @@ class VideoCreator:
 
                 bg_audio = mp.AudioFileClip(str(music_path))
 
+                # Loop music if shorter than video duration
                 if bg_audio.duration < video_duration:
                     loops = int(video_duration / bg_audio.duration) + 1
                     bg_audio = mp.concatenate_audioclips([bg_audio] * loops)
                 bg_audio = bg_audio.subclip(0, video_duration)
                 bg_audio = bg_audio.audio_fadein(1.0).audio_fadeout(1.5)
 
+                # Lower bg music when TTS is present
                 bg_volume = 0.3 if tts_audio else 0.8
                 bg_audio = bg_audio.volumex(bg_volume)
 
@@ -413,6 +403,7 @@ class VideoCreator:
                 video = video.set_audio(tts_audio)
 
             # Save video
+            output_path = Path("output_short.mp4")
             video.write_videofile(
                 str(output_path),
                 fps=fps,
@@ -423,7 +414,7 @@ class VideoCreator:
             return output_path
 
         except Exception as e:
-            logger.error(f"[Video {index+1}] Video creation failed: {str(e)}")
+            logger.error(f"Video creation failed: {str(e)}")
             return None
         finally:
             for f in [img_path, tts_path, tts_fast_path]:
@@ -435,23 +426,7 @@ class YouTubeUploader:
     def __init__(self, credentials: dict):
         self.credentials = credentials
 
-    def upload_short(
-        self,
-        video_path: Path,
-        config: Config,
-        caption: str = "",
-        all_captions: Optional[List[str]] = None,
-        publish_delay_hours: int = 1,
-    ):
-        """Upload a single Short to YouTube.
-
-        Args:
-            video_path: Path to the video file.
-            config: Pipeline configuration.
-            caption: Caption for this specific video (used for title + tags).
-            all_captions: All captions from the batch run -- included in the description.
-            publish_delay_hours: Hours from now when the video will go public.
-        """
+    def upload_short(self, video_path: Path, config: Config, caption: str = ""):
         try:
             creds = Credentials.from_authorized_user_info(self.credentials)
             youtube = build("youtube", "v3", credentials=creds)
@@ -462,35 +437,26 @@ class YouTubeUploader:
                 for word in caption.split()
                 if len(word.strip("#.,!?")) > 3
             ]
-            brand_tags = config.BRAND_HASHTAGS
+            # Merge brand hashtags (always present) + caption tags
+            brand_tags = config.BRAND_HASHTAGS  # ["cryptohieuqua", "cryptohieu.com"]
             all_tags = config.TAGS + brand_tags + caption_tags
 
+            # Build hashtag string: brand hashtags first, then top caption tags
             brand_hashtag_str = " ".join(f"#{t}" for t in brand_tags)
             caption_hashtag_str = " ".join(f"#{t}" for t in caption_tags[:5])
             hashtags = f"{brand_hashtag_str} {caption_hashtag_str}".strip()
 
-            # Title
+            # Title: "Video Short + caption + datetime"
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
             title = f"Video Short {caption[:50]} {date_str}"
 
-            # Build description: base description + all captions block + hashtags
-            captions_block = ""
-            if all_captions:
-                numbered = "\n".join(
-                    f"{i+1}. {cap}" for i, cap in enumerate(all_captions)
-                )
-                captions_block = f"\n\n📋 Nội dung:\n{numbered}"
+            # Description with hashtags
+            description = f"{config.DESCRIPTION}\n\n{hashtags}\n#Shorts\n\ncryptohieu.com"
 
-            description = (
-                f"{config.DESCRIPTION}"
-                f"{captions_block}"
-                f"\n\n{hashtags}\n#Shorts\n\ncryptohieu.com"
+            # Schedule publish time: now + PUBLISH_DELAY_HOURS
+            publish_at = (datetime.now(timezone.utc) + timedelta(hours=config.PUBLISH_DELAY_HOURS)).strftime(
+                "%Y-%m-%dT%H:%M:%S.000Z"
             )
-
-            # Schedule publish time
-            publish_at = (
-                datetime.now(timezone.utc) + timedelta(hours=publish_delay_hours)
-            ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
             logger.info(f"Scheduling publish at: {publish_at} UTC")
 
             body = {
@@ -501,13 +467,17 @@ class YouTubeUploader:
                     "categoryId": "22"
                 },
                 "status": {
-                    "privacyStatus": "private",
-                    "publishAt": publish_at,
+                    "privacyStatus": "private",         # must be private for scheduled
+                    "publishAt": publish_at,             # schedule publish time
                     "selfDeclaredMadeForKids": False
                 }
             }
 
-            media = MediaFileUpload(str(video_path), chunksize=-1, resumable=True)
+            media = MediaFileUpload(
+                str(video_path),
+                chunksize=-1,
+                resumable=True
+            )
 
             request = youtube.videos().insert(
                 part=",".join(body.keys()),
@@ -562,7 +532,6 @@ async def _main():
             PLAYLIST_ID=os.getenv("PLAYLIST_ID", "PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv"),
             PUBLISH_DELAY_HOURS=int(os.getenv("PUBLISH_DELAY_HOURS", 1)),
             BRAND_HASHTAGS=get_env_json("BRAND_HASHTAGS", '["cryptohieuqua", "cryptohieu.com"]'),
-            MAX_POSTS=int(os.getenv("MAX_POSTS", 3)),
             DURATION=int(os.getenv("DURATION", 15)),
             MUSIC_OPTION=os.getenv("MUSIC_OPTION", "CigSwaag-JinglePunks.mp3"),
             FONT_PATH=os.getenv("FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
@@ -577,7 +546,7 @@ async def _main():
         if not config.TELEGRAM_CHANNELS:
             raise ValueError("At least one TELEGRAM_CHANNEL must be specified")
 
-        # -- Load published IDs (sole duplicate guard) --
+        # Load published IDs for duplicate prevention
         published_ids_file = Path(config.PUBLISHED_IDS_FILE)
         published_ids: set = set()
         if published_ids_file.exists():
@@ -587,72 +556,35 @@ async def _main():
             except Exception as e:
                 logger.warning(f"Could not load published IDs: {e}")
 
-        # -- Fetch up to MAX_POSTS latest posts from Telegram --
+        # Fetch content from Telegram (skip already-published posts)
         telegram = TelegramClient(config.TELEGRAM_TOKEN)
-        posts: List[Tuple[str, str, str]] = []
+        content = None
+        caption = ""
+        image_url = ""
+        unique_key = ""
 
         for channel in config.TELEGRAM_CHANNELS:
-            channel_posts = telegram.get_latest_images(
-                channel, published_ids, max_posts=config.MAX_POSTS
-            )
-            posts.extend(channel_posts)
-            if len(posts) >= config.MAX_POSTS:
-                posts = posts[: config.MAX_POSTS]
+            content = telegram.get_latest_image(channel, published_ids)
+            if content:
+                image_url, caption, unique_key = content
                 break
 
-        if not posts:
-            logger.error(
-                "No new suitable content found — no unprocessed photo posts in the "
-                "Telegram window. Post new images to the channel and re-run."
-            )
+        if not content:
+            logger.error("No new suitable content found (all recent posts already published or no photos)")
             return
 
-        logger.info(f"Found {len(posts)} new post(s) to process")
-
-        # Collect all captions upfront
-        all_captions = [caption for _, caption, _ in posts]
-
-        # -- Process each post sequentially --
+        # Create video
         creator = VideoCreator(config)
+        video_path = await creator.create_short(image_url, caption)
+        if not video_path or not video_path.exists():
+            raise RuntimeError("Video creation failed")
+
+        # Upload to YouTube
         uploader = YouTubeUploader(config.YOUTUBE_CLIENT_SECRETS)
-        processed = 0
+        uploader.upload_short(video_path, config, caption=caption)
 
-        for index, (image_url, caption, unique_key) in enumerate(posts):
-            logger.info(f"=== Processing post {index+1}/{len(posts)}: {unique_key} ===")
-
-            # Attempt video creation — retry once on failure
-            video_path = await creator.create_short(image_url, caption, index=index)
-            if not video_path or not video_path.exists():
-                logger.warning(f"Video creation failed for post {index+1}, retrying once...")
-                await asyncio.sleep(2)
-                video_path = await creator.create_short(image_url, caption, index=index)
-
-            if not video_path or not video_path.exists():
-                logger.error(
-                    f"Video creation failed twice for post {index+1} ({unique_key}). "
-                    f"This post will be retried on the next run."
-                )
-                continue
-
-            publish_offset = config.PUBLISH_DELAY_HOURS + index
-            upload_result = uploader.upload_short(
-                video_path,
-                config,
-                caption=caption,
-                all_captions=all_captions,
-                publish_delay_hours=publish_offset,
-            )
-
-            if upload_result is None:
-                logger.error(
-                    f"Upload failed for post {index+1} ({unique_key}). "
-                    f"This post will be retried on the next run."
-                )
-                if video_path.exists():
-                    video_path.unlink()
-                continue
-
-            # SUCCESS — mark as published so it is skipped on the next run
+        # Mark post as published to prevent future duplicates
+        if unique_key:
             published_ids.add(unique_key)
             try:
                 published_ids_file.write_text(json.dumps(list(published_ids)))
@@ -660,13 +592,10 @@ async def _main():
             except Exception as e:
                 logger.warning(f"Could not save published IDs: {e}")
 
-            if video_path.exists():
-                video_path.unlink()
-                logger.info(f"Cleaned up {video_path}")
-
-            processed += 1
-
-        logger.info(f"Pipeline complete. Successfully processed {processed}/{len(posts)} video(s).")
+        # Cleanup
+        if video_path.exists():
+            video_path.unlink()
+            logger.info("Temporary files cleaned up")
 
     except Exception as e:
         logger.exception("Fatal error in main process")
