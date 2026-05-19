@@ -1,33 +1,30 @@
-# YouTube Shorts Automation
+# ShortCreator — YouTube Shorts Automation
 
-Automatically create YouTube Shorts from Telegram channel content.
+Automatically create and publish YouTube Shorts from Telegram channel content.
 
----
+**Pipeline:** Telegram photo post → Vietnamese TTS → Ken Burns video → YouTube (scheduled)
 
-## 🔑 Getting a New OAuth Refresh Token (Required for Playlist Support)
+-----
 
-Playlist management requires the **full YouTube scope**. If you previously generated a token with only `youtube.upload`, you must get a new one. Follow these exact steps:
+## 🔑 Getting a YouTube OAuth Refresh Token
 
-### Step-by-step via OAuth Playground
+Playlist management requires the **full YouTube scope**. Follow these steps exactly:
 
 1. Go to **https://developers.google.com/oauthplayground/**
-
-2. Click the **gear icon ⚙️** (top-right) → check **"Use your own OAuth credentials"**
-   - Enter your **OAuth Client ID** and **OAuth Client Secret** from Google Cloud Console
-
-3. In the left panel, find **"YouTube Data API v3"** and select this scope:
+1. Click the **gear icon ⚙️** (top-right) → check **“Use your own OAuth credentials”**
+- Enter your **OAuth Client ID** and **OAuth Client Secret** from Google Cloud Console
+1. In the left panel, find **“YouTube Data API v3”** and select:
+   
    ```
    https://www.googleapis.com/auth/youtube
    ```
-   > ⚠️ Do NOT use `youtube.upload` — that scope alone blocks playlist operations.
 
-4. Click **"Authorize APIs"** → sign in with your YouTube account → allow access
-
-5. Click **"Exchange authorization code for tokens"**
-
-6. Copy the **Refresh token** value shown
-
-7. Build your `YOUTUBE_CLIENT_SECRETS` JSON secret (store in GitHub Secrets):
+> ⚠️ Do NOT use `youtube.upload` — that scope alone blocks playlist operations.
+1. Click **“Authorize APIs”** → sign in with your YouTube account → allow access
+1. Click **“Exchange authorization code for tokens”**
+1. Copy the **Refresh token** value shown
+1. Build your `YOUTUBE_CLIENT_SECRETS` JSON (store in GitHub Secrets):
+   
    ```json
    {
      "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
@@ -37,59 +34,101 @@ Playlist management requires the **full YouTube scope**. If you previously gener
    }
    ```
 
----
+-----
 
 ## Setup
 
 ### 1. Telegram Bot Token
+
 - Create a bot via [@BotFather](https://t.me/BotFather)
 - Add the bot as an **admin** to your channel(s)
 - Copy the HTTP API token
 
 ### 2. YouTube API (Google Cloud Console)
+
 - Go to [Google API Console](https://console.cloud.google.com/apis/dashboard)
 - Create a project → enable **YouTube Data API v3**
 - Create **OAuth 2.0 credentials** (type: Web application)
 - Add `https://developers.google.com/oauthplayground` as an authorized redirect URI
-- Download or note your Client ID + Secret
+- Note your Client ID + Secret
 
 ### 3. GitHub Secrets
 
-| Secret | Value |
-|--------|-------|
-| `TELEGRAM_TOKEN` | Your Telegram bot token |
-| `TELEGRAM_CHANNELS` | `["@yourchannel"]` (JSON array) |
-| `YOUTUBE_CLIENT_SECRETS` | Full JSON with client_id, client_secret, refresh_token, token_uri |
-| `PLAYLIST_ID` | `PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv` |
+|Secret                  |Value                                                            |
+|------------------------|-----------------------------------------------------------------|
+|`TELEGRAM_TOKEN`        |Your Telegram bot token                                          |
+|`TELEGRAM_CHANNELS`     |`["@yourchannel"]` (JSON array)                                  |
+|`YOUTUBE_CLIENT_SECRETS`|Full JSON with client_id, client_secret, refresh_token, token_uri|
 
-### 4. Optional env vars (with defaults)
+### 4. Environment Variables (with defaults)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PUBLISH_DELAY_HOURS` | `1` | Hours until scheduled publish |
-| `BRAND_HASHTAGS` | `["cryptohieuqua","cryptohieu.com"]` | Always-on hashtags |
-| `DURATION` | `15` | Minimum video duration (seconds) |
-| `PRIVACY_STATUS` | `private` | Upload privacy (always private when scheduled) |
-| `TAGS` | `["Shorts","Auto-generated"]` | Base YouTube tags |
-| `DESCRIPTION` | `"Automated YouTube Short"` | Video description prefix |
-| `MUSIC_OPTION` | *(built-in URL)* | Background music URL or file path |
+|Variable             |Default                                               |Description                                                  |
+|---------------------|------------------------------------------------------|-------------------------------------------------------------|
+|`PLAYLIST_ID`        |`PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv`                  |YouTube playlist to add each video to                        |
+|`PUBLISH_DELAY_HOURS`|`1`                                                   |Hours until scheduled publish                                |
+|`BRAND_HASHTAGS`     |`["cryptohieuqua","cryptohieu.com"]`                  |Always-on hashtags appended to every video                   |
+|`DURATION`           |`15`                                                  |Minimum video duration in seconds (extended if TTS is longer)|
+|`PRIVACY_STATUS`     |`private`                                             |Upload privacy (always private when scheduled)               |
+|`TAGS`               |`["Shorts","Auto-generated"]`                         |Base YouTube tags                                            |
+|`DESCRIPTION`        |`"Automated YouTube Short"`                           |Video description prefix                                     |
+|`MUSIC_OPTION`       |`music.mp3`                                           |Background music file path or HTTP URL                       |
+|`FONT_PATH`          |`/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf`     |Regular font                                                 |
+|`FONT_BOLD_PATH`     |`/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf`|Bold font for captions                                       |
+|`MAX_TELEGRAM_POSTS` |`10`                                                  |Max new posts to process per run                             |
 
----
+-----
 
 ## Features
 
-- **Telegram → YouTube pipeline** — fetches latest image+caption from your channels
-- **Duplicate prevention** — tracks processed message IDs in `.published_ids.json`; never uploads the same post twice
-- **Vietnamese TTS** — reads caption aloud with `vi-VN-HoaiMyNeural` voice, appending *"Đừng quên đăng ký kênh..."*
-- **Scheduled publish** — uploads as private, auto-publishes after 1 hour
-- **Playlist auto-add** — every new video is added to your playlist immediately after upload
-- **Brand hashtags** — `#cryptohieuqua #cryptohieu.com` on every video
-- **Word-synced captions** — highlighted karaoke-style words over a Ken Burns zoom
-- **Background music** — mixed at lower volume when TTS is present
+### Telegram → YouTube Pipeline
 
----
+Fetches up to `MAX_TELEGRAM_POSTS` new photo posts from each configured channel, newest-first. For each post, one Short is created and uploaded.
 
-## Run locally
+### Duplicate Prevention
+
+Every `channel:message_id` that is successfully uploaded is saved to `.published_ids.json`. Posts already in this file are skipped on future runs. The file is committed back to the repo after each GitHub Actions run so state persists across ephemeral runners.
+
+### Vietnamese TTS with Word-Synced Captions
+
+- Caption text is read aloud using `edge-tts` with the `vi-VN-HoaiMyNeural` voice
+- A Vietnamese subscribe call-to-action is automatically appended: *“Đừng quên đăng ký kênh để xem thêm nhiều video hữu ích nhé!”*
+- TTS audio is sped up to **1.25×** via ffmpeg `atempo` filter
+- Word timings come from `WordBoundary` events; if the Vietnamese voice does not fire them, timings are calculated by evenly distributing words across the real TTS duration
+- Each spoken word is displayed on screen in yellow bold text with a grey semi-transparent rounded background (karaoke-style), positioned in the lower third of the frame
+
+### Ken Burns Zoom Effect
+
+Each frame applies a smooth zoom-in then zoom-out over the full video duration (peaks at **1.15× scale** at the midpoint), giving static images a dynamic, broadcast-quality feel.
+
+### Brand Logo Overlay
+
+`brand_logo.png` (repo root) is composited into the **top-right corner** of every frame at 140px, with a 20px margin.
+
+### Background Music Mixing
+
+- Background music plays at **30% volume** when TTS is present, **80%** otherwise
+- Music loops automatically if shorter than the video duration
+- Audio fades in (1s) and out (1.5s)
+- TTS audio plays at full volume layered on top of the music
+
+### Video Output
+
+- Resolution: **1080×1920** (portrait / Shorts format)
+- Frame rate: **24 fps**
+- Codec: H.264 video + AAC audio
+- Video fades in and out (0.5s each)
+- Duration: whichever is longer — `DURATION` seconds or TTS length + 1s
+
+### YouTube Upload
+
+- Uploaded as **private** with a scheduled `publishAt` (`PUBLISH_DELAY_HOURS` from now)
+- Title: `Video Short {caption[:50]} YYYY-MM-DD HH:MM`
+- Description: base description + original caption + brand hashtags + top caption-derived hashtags
+- Video is added to `PLAYLIST_ID` immediately after upload
+
+-----
+
+## Run Locally
 
 ```bash
 pip install -r requirements.txt
@@ -101,84 +140,39 @@ export PLAYLIST_ID="PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv"
 
 python short_creator.py
 ```
-# ShortCreator — Duplicate Prevention Guide
 
-## How duplicates are prevented
-
-Two layers work together to ensure the same Telegram post is never turned into a video twice.
-
-### Layer 1 — Telegram `getUpdates` offset (primary)
-
-Every time the bot calls Telegram's `getUpdates` API it passes an `offset` value. Telegram uses this as an acknowledgement cursor: once you pass `offset=N`, Telegram permanently marks all updates below N as seen and **never returns them again** — even if the bot restarts or the workflow re-runs.
-
-The current offset is saved to `.telegram_offset.json` after every run.
-
-### Layer 2 — Published IDs file (fallback)
-
-Every `channel:message_id` that was successfully uploaded to YouTube is written to `.published_ids.json`. If `.telegram_offset.json` is ever lost or reset, this file acts as a second check and skips any post whose ID is already in the list.
-
----
-
-## State files
-
-| File | Purpose |
-|---|---|
-| `.telegram_offset.json` | Stores the `getUpdates` cursor per channel so Telegram never re-delivers old updates |
-| `.published_ids.json` | Stores every `channel:message_id` that was already uploaded (fallback guard) |
-
-Both files live in the **repo root**, same level as `short_creator.py`. They are committed to the repo so they persist across GitHub Actions runs.
-
----
-
-## Setup — commit the state files to your repo
-
-Because GitHub Actions runners are ephemeral (wiped after every run), the state files must be **committed to the repository** so `actions/checkout` restores them on every run.
-
-### First-time setup
+You also need `ffmpeg` installed and the DejaVu fonts available:
 
 ```bash
-# In your local repo clone
-touch .published_ids.json .telegram_offset.json
-echo "[]" > .published_ids.json
-echo "{}" > .telegram_offset.json
-
-git add .published_ids.json .telegram_offset.json
-git commit -m "chore: add initial state files for duplicate prevention"
-git push
+sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-color-emoji
 ```
 
-### How updates get saved back
+-----
 
-The workflow uses the **write-back pattern**: after `short_creator.py` runs it updates both files on disk. The final workflow step commits and pushes any changes back to the repo automatically, so the next run starts with the latest state.
+## GitHub Actions Workflow
 
-Make sure your workflow has **write permissions**. Go to:
-`Settings → Actions → General → Workflow permissions → Read and write permissions`
-
----
-
-## Workflow file — `.github/workflows/shortcreator.yml`
+The workflow runs every **6 hours** and on manual dispatch.
 
 ```yaml
 on:
   schedule:
-    - cron: '0 */8 * * *'  # Every 8 hours
-  workflow_dispatch:  # Manual trigger
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
-
     permissions:
-      contents: write  # needed to push state files back
+      contents: write   # needed to push .published_ids.json back
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
       - name: Install fonts
         run: |
           sudo apt-get install -y fonts-dejavu-core fonts-noto-color-emoji
           pip install pilmoji
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -202,16 +196,40 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .published_ids.json .telegram_offset.json
+          git add .published_ids.json
           git diff --cached --quiet || git commit -m "chore: update state files [skip ci]"
           git push
 ```
 
-> The `[skip ci]` tag in the commit message prevents the push from triggering another workflow run.
+> `[skip ci]` in the commit message prevents the push from triggering another workflow run.
 
----
+**Required repo setting:** `Settings → Actions → General → Workflow permissions → Read and write permissions`
 
-## File structure
+-----
+
+## State File Setup
+
+**First time:**
+
+```bash
+echo "[]" > .published_ids.json
+git add .published_ids.json
+git commit -m "chore: add initial state file for duplicate prevention"
+git push
+```
+
+**Reset (reprocess old posts):**
+
+```bash
+echo "[]" > .published_ids.json
+git add .published_ids.json
+git commit -m "chore: reset duplicate prevention state"
+git push
+```
+
+-----
+
+## File Structure
 
 ```
 shortcreator/
@@ -219,23 +237,25 @@ shortcreator/
 │   └── workflows/
 │       └── shortcreator.yml
 ├── .published_ids.json     ← committed, updated each run
-├── .telegram_offset.json   ← committed, updated each run
+├── .gitignore
 ├── README.md
-├── brand_logo.png
+├── brand_logo.png          ← overlaid top-right on every frame
+├── music.mp3               ← default background music
 ├── requirements.txt
 └── short_creator.py
 ```
 
----
+-----
 
-## Resetting the state
+## Dependencies
 
-If you want to reprocess old posts (e.g. after a test), reset both files:
-
-```bash
-echo "[]" > .published_ids.json
-echo "{}" > .telegram_offset.json
-git add .published_ids.json .telegram_offset.json
-git commit -m "chore: reset duplicate prevention state"
-git push
-```
+|Package                                  |Purpose                             |
+|-----------------------------------------|------------------------------------|
+|`moviepy`                                |Video assembly, audio mixing        |
+|`pillow`                                 |Image processing, caption rendering |
+|`numpy`                                  |Frame array manipulation            |
+|`requests`                               |Telegram API, music download        |
+|`edge-tts`                               |Vietnamese text-to-speech           |
+|`google-auth`, `google-api-python-client`|YouTube Data API v3                 |
+|`pilmoji`                                |Emoji-aware font rendering          |
+|`ffmpeg` (system)                        |TTS speed-up (1.25×), video encoding|
