@@ -180,9 +180,27 @@ class VideoCreator:
             tts_path = Path("temp_tts.mp3")
             word_timings = []
 
+            # Strip emojis from text before TTS
+            import re
+            def strip_emojis(s: str) -> str:
+                return re.sub(
+                    r"[🌀-🪿"
+                    r"😀-🙏"
+                    r"🚀-🛿"
+                    r"☀-⛿"
+                    r"✀-➿"
+                    r"🤀-🧿"
+                    r"🇠-🇿"
+                    r"‍"
+                    r"︀-️]+",
+                    "", s
+                ).strip()
+
+            clean_text = strip_emojis(text)
+
             # Append Vietnamese subscribe call-to-action
             subscribe_cta = "Đừng quên đăng ký kênh để xem thêm nhiều video hữu ích nhé!"
-            text_with_cta = f"{text}. {subscribe_cta}"
+            text_with_cta = f"{clean_text}. {subscribe_cta}"
             communicate = edge_tts.Communicate(text_with_cta, voice="vi-VN-HoaiMyNeural")
 
             with open(str(tts_path), "wb") as f:
