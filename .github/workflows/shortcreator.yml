@@ -1,6 +1,6 @@
 on:
   schedule:
-    - cron: '0 */6 * * *'  # Every 6hours
+    - cron: '0 */8 * * *'  # Every 6hours
   workflow_dispatch:  # Manual trigger
 
 jobs:
