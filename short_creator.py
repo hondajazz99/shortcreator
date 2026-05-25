@@ -594,7 +594,7 @@ async def _main():
 
         # Fetch up to MAX_TELEGRAM_POSTS new photos from all configured Telegram channels
         telegram = TelegramClient(config.TELEGRAM_TOKEN)
-        MAX_POSTS = int(os.getenv("MAX_TELEGRAM_POSTS", 10))
+        MAX_POSTS = int(os.getenv("MAX_TELEGRAM_POSTS", 5))
         all_posts: List[Tuple[str, str, str]] = []
         for channel in config.TELEGRAM_CHANNELS:
             posts = telegram.get_latest_images(channel, published_ids, max_posts=MAX_POSTS)
