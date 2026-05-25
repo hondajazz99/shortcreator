@@ -49,7 +49,7 @@ class Config:
     DESCRIPTION: str = "Automated YouTube Short created from Telegram content"
     TAGS: List[str] = field(default_factory=lambda: ["Shorts", "Auto-generated", "Telegram"])
     PRIVACY_STATUS: str = "private"
-    PLAYLIST_ID: str = "PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv"  # Target playlist
+    PLAYLIST_ID: str = "PLKfhqWP2rL8LS6mS4eJk0sx43sD4x8TeV"  # Target playlist
     PUBLISH_DELAY_HOURS: int = 1                               # Schedule publish N hours from now
     BRAND_HASHTAGS: List[str] = field(default_factory=lambda: ["cryptohieuqua", "cryptohieu.com"])
 
@@ -199,9 +199,9 @@ class VideoCreator:
             clean_text = strip_emojis(text)
 
             # Append Vietnamese subscribe call-to-action
-            subscribe_cta = "Đừng quên đăng ký kênh để xem thêm nhiều video hữu ích nhé!"
+            subscribe_cta = "Don't forget to like and subscribe to the channel for more useful videos!"
             text_with_cta = f"{clean_text}. {subscribe_cta}"
-            communicate = edge_tts.Communicate(text_with_cta, voice="vi-VN-HoaiMyNeural")
+            communicate = edge_tts.Communicate(text_with_cta, voice="en-SG-LunaNeural")
 
             with open(str(tts_path), "wb") as f:
                 async for chunk in communicate.stream():
@@ -559,15 +559,15 @@ async def _main():
         # Load configuration
         config = Config(
             TELEGRAM_TOKEN=os.getenv("TELEGRAM_TOKEN"),
-            TELEGRAM_CHANNELS=get_env_json("TELEGRAM_CHANNELS", '["@TechTalk66"]'),
+            TELEGRAM_CHANNELS=get_env_json("TELEGRAM_CHANNELS", '["@xeonbitchannel"]'),
             YOUTUBE_CLIENT_SECRETS=get_env_json("YOUTUBE_CLIENT_SECRETS", '{}'),
             TITLE_TEMPLATE=os.getenv("TITLE_TEMPLATE", "Video Short - {date}"),
             DESCRIPTION=os.getenv("DESCRIPTION", "Automated YouTube Short"),
             TAGS=get_env_json("TAGS", '["Shorts", "Auto-generated"]'),
             PRIVACY_STATUS=os.getenv("PRIVACY_STATUS", "private"),
-            PLAYLIST_ID=os.getenv("PLAYLIST_ID", "PL3B7UtjF3P8ya2XNvBX8fgKOoqsCza8dv"),
+            PLAYLIST_ID=os.getenv("PLAYLIST_ID", "PLKfhqWP2rL8LS6mS4eJk0sx43sD4x8TeV"),
             PUBLISH_DELAY_HOURS=int(os.getenv("PUBLISH_DELAY_HOURS", 1)),
-            BRAND_HASHTAGS=get_env_json("BRAND_HASHTAGS", '["cryptohieuqua", "cryptohieu.com"]'),
+            BRAND_HASHTAGS=get_env_json("BRAND_HASHTAGS", '["xeonbit24", "xeonbit24.com"]'),
             DURATION=int(os.getenv("DURATION", 15)),
             MUSIC_OPTION=os.getenv("MUSIC_OPTION", "music.mp3"),
             FONT_PATH=os.getenv("FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
