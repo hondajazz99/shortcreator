@@ -51,7 +51,7 @@ class Config:
     PRIVACY_STATUS: str = "private"
     PLAYLIST_ID: str = "PLKfhqWP2rL8LS6mS4eJk0sx43sD4x8TeV"  # Target playlist
     PUBLISH_DELAY_HOURS: int = 1                               # Schedule publish N hours from now
-    BRAND_HASHTAGS: List[str] = field(default_factory=lambda: ["cryptohieuqua", "cryptohieu.com"])
+    BRAND_HASHTAGS: List[str] = field(default_factory=lambda: ["xeonbit24", "xeonbit24.com"])
 
     # Content
     DURATION: int = 15
@@ -487,7 +487,7 @@ class YouTubeUploader:
 
             # Description: base description + original caption + hashtags
             caption_section = f"\n\n📌 {caption.strip()}" if caption and caption != "No caption" else ""
-            description = f"{config.DESCRIPTION}{caption_section}\n\n{hashtags}\n#Shorts\n\ncryptohieu.com"
+            description = f"{config.DESCRIPTION}{caption_section}\n\n{hashtags}\n#Shorts\n\nxeonbit24.com"
 
             # Schedule publish time: now + PUBLISH_DELAY_HOURS
             publish_at = (datetime.now(timezone.utc) + timedelta(hours=config.PUBLISH_DELAY_HOURS)).strftime(
