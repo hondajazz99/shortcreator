@@ -92,7 +92,7 @@ class TelegramClient:
         self,
         channel: str,
         published_ids: set,
-        max_posts: int = 10,
+        max_posts: int = 3,
     ) -> List[Tuple[str, str, str]]:
         """Return a list of (image_url, caption, unique_key) for up to *max_posts*
         unprocessed photo posts from *channel*, newest-first."""
@@ -649,7 +649,7 @@ async def _main():
         # Gather ALL new Telegram photos from ALL channels → one list
         # ----------------------------------------------------------------
         telegram = TelegramClient(config.TELEGRAM_TOKEN)
-        max_per_channel = int(os.getenv("MAX_TELEGRAM_POSTS", 5))
+        max_per_channel = int(os.getenv("MAX_TELEGRAM_POSTS", 3))
         all_posts: List[Tuple[str, str, str]] = []
 
         for channel in config.TELEGRAM_CHANNELS:
