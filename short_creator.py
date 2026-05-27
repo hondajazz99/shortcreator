@@ -218,7 +218,7 @@ class VideoCreator:
             tts_path = Path("temp_tts.mp3")
             word_timings = []
             clean_text = strip_emojis(text)
-            subscribe_cta = "Don't forget to like and subscribe to the channel for more useful videos!"
+            subscribe_cta = "Remember to like and subscribe for more useful videos!"
             text_with_cta = f"{clean_text}. {subscribe_cta}"
 
             communicate = edge_tts.Communicate(text_with_cta, voice="en-SG-LunaNeural")
@@ -312,7 +312,7 @@ class VideoCreator:
     async def create_compiled_short(
         self,
         posts: List[Tuple[str, str, str]],
-    ) -> Optional[Path]:
+    ) -> Tuple[Optional[Path], List[str]]:  # (video_path, all_captions)
         """
         Build a single 9:16 vertical MP4 by compiling *posts* into a slide-show.
 
@@ -330,7 +330,7 @@ class VideoCreator:
 
         Returns
         -------
-        Path to the output MP4, or None on failure.
+        Tuple of (Path to the output MP4 or None on failure, list of all captions).
         """
         # Temp file paths
         tmp_tts_raw = Path("temp_tts.mp3")
@@ -431,7 +431,7 @@ class VideoCreator:
 
             if not slide_clips:
                 logger.error("No slides rendered; cannot produce output video.")
-                return None
+                return None, []
 
             # ------------------------------------------------------------------
             # 4. Concatenate slides into one video
@@ -500,11 +500,11 @@ class VideoCreator:
                 logger="bar",
             )
             logger.info(f"Compiled short saved: {output_path}")
-            return output_path
+            return output_path, all_captions
 
         except Exception as e:
             logger.error(f"Compiled short creation failed: {str(e)}")
-            return None
+            return None, []
         finally:
             # Clean up any stray temp files
             for p in [tmp_tts_raw, tmp_tts_fast]:
@@ -519,29 +519,68 @@ class YouTubeUploader:
     def __init__(self, credentials: dict):
         self.credentials = credentials
 
-    def upload_short(self, video_path: Path, config: Config, caption: str = ""):
+    def upload_short(self, video_path: Path, config: Config, caption: str = "", all_captions: List[str] = None):
         try:
             creds = Credentials.from_authorized_user_info(self.credentials)
             youtube = build("youtube", "v3", credentials=creds)
 
-            caption_tags = [
-                word.strip("#.,!?").lower()
-                for word in caption.split()
-                if len(word.strip("#.,!?")) > 3
-            ]
-            brand_tags = config.BRAND_HASHTAGS
-            all_tags = config.TAGS + brand_tags + caption_tags
+            if all_captions is None:
+                all_captions = [caption] if caption else []
+
+            import re as _re
+
+            def sanitize_tag(t: str) -> str:
+                """Strip to ASCII-safe alphanumeric + spaces, max 30 chars."""
+                t = t.strip("#.,!?:;\"'()[]{}").strip()
+                # Remove characters YouTube rejects (keep letters, digits, spaces)
+                t = _re.sub(r"[^\w\s]", "", t, flags=_re.UNICODE)
+                t = t.strip()
+                return t[:30] if t else ""
+
+            # Extract tags from ALL captions
+            caption_tags = []
+            seen_tags: set = set()
+            for cap in all_captions:
+                for word in cap.split():
+                    clean = sanitize_tag(word.lower())
+                    if len(clean) > 2 and clean not in seen_tags:
+                        caption_tags.append(clean)
+                        seen_tags.add(clean)
+
+            brand_tags = [sanitize_tag(t) for t in config.BRAND_HASHTAGS]
+            brand_tags = [t for t in brand_tags if t]
+            base_tags  = [sanitize_tag(t) for t in config.TAGS]
+            base_tags  = [t for t in base_tags if t]
+
+            # Deduplicate and cap: YouTube allows max 500 chars total across all tags
+            raw_tags = base_tags + brand_tags + caption_tags
+            all_tags: List[str] = []
+            seen_final: set = set()
+            total_chars = 0
+            for t in raw_tags:
+                if t in seen_final:
+                    continue
+                if total_chars + len(t) + 1 > 500:
+                    break
+                all_tags.append(t)
+                seen_final.add(t)
+                total_chars += len(t) + 1
 
             brand_hashtag_str = " ".join(f"#{t}" for t in brand_tags)
-            caption_hashtag_str = " ".join(f"#{t}" for t in caption_tags[:5])
+            caption_hashtag_str = " ".join(f"#{t}" for t in caption_tags[:10])
             hashtags = f"{brand_hashtag_str} {caption_hashtag_str}".strip()
 
             date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-            title = f"Video Short {caption[:50]} {date_str}"
+            primary_cap = all_captions[0] if all_captions else caption
+            title = f"Video Short {primary_cap[:50]} {date_str}"
 
-            caption_section = (
-                f"\n\n📌 {caption.strip()}" if caption and caption != "No caption" else ""
+            # Build description with all captions
+            caption_lines = "\n".join(
+                f"📌 {cap.strip()}"
+                for cap in all_captions
+                if cap and cap != "No caption"
             )
+            caption_section = f"\n\n{caption_lines}" if caption_lines else ""
             description = (
                 f"{config.DESCRIPTION}{caption_section}\n\n{hashtags}\n#Shorts\n\nxeonbit24.com"
             )
@@ -596,7 +635,16 @@ class YouTubeUploader:
 
             return response
         except Exception as e:
-            logger.error(f"Upload failed: {str(e)}")
+            err_str = str(e)
+            if "rateLimitExceeded" in err_str or "Video Uploads per day" in err_str:
+                logger.error(
+                    "YouTube daily upload quota exceeded. "
+                    "Quota resets at midnight Pacific Time. "
+                    "To increase limits: console.cloud.google.com → "
+                    "APIs & Services → YouTube Data API v3 → Quotas."
+                )
+                raise SystemExit(1)
+            logger.error(f"Upload failed: {err_str}")
 
 
 # ---------------------------------------------------------------------------
@@ -614,9 +662,9 @@ async def _main():
             PRIVACY_STATUS=os.getenv("PRIVACY_STATUS", "private"),
             PLAYLIST_ID=os.getenv("PLAYLIST_ID", "PLKfhqWP2rL8LS6mS4eJk0sx43sD4x8TeV"),
             PUBLISH_DELAY_HOURS=int(os.getenv("PUBLISH_DELAY_HOURS", 1)),
-            BRAND_HASHTAGS=get_env_json("BRAND_HASHTAGS", '["xeonbit24", "xeonbit24.com"]'),
+            BRAND_HASHTAGS=get_env_json("BRAND_HASHTAGS", '["xeonbit", "xeonbit24.com"]'),
             SLIDE_DURATION=int(os.getenv("SLIDE_DURATION", 5)),
-            MAX_DURATION=int(os.getenv("MAX_DURATION", 60)),
+            MAX_DURATION=int(os.getenv("MAX_DURATION", 59)),
             MUSIC_OPTION=os.getenv("MUSIC_OPTION", "music.mp3"),
             FONT_PATH=os.getenv(
                 "FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -637,10 +685,10 @@ async def _main():
         # Load published IDs
         # ----------------------------------------------------------------
         published_ids_file = Path(config.PUBLISHED_IDS_FILE)
-        published_ids: set = set()
+        published_ids: list = []
         if published_ids_file.exists():
             try:
-                published_ids = set(json.loads(published_ids_file.read_text()))
+                published_ids = json.loads(published_ids_file.read_text())
                 logger.info(f"Loaded {len(published_ids)} published IDs")
             except Exception as e:
                 logger.warning(f"Could not load published IDs: {e}")
@@ -677,7 +725,7 @@ async def _main():
         # Use the first post's caption as the YouTube title/description seed
         primary_caption = all_posts[0][1] if all_posts else ""
 
-        video_path = await creator.create_compiled_short(all_posts)
+        video_path, all_captions = await creator.create_compiled_short(all_posts)
 
         if not video_path or not video_path.exists():
             logger.error("Compiled video creation failed — nothing to upload.")
@@ -687,19 +735,31 @@ async def _main():
         # Upload the ONE video to YouTube
         # ----------------------------------------------------------------
         uploader = YouTubeUploader(config.YOUTUBE_CLIENT_SECRETS)
-        uploader.upload_short(video_path, config, caption=primary_caption)
+        upload_result = uploader.upload_short(
+            video_path, config, caption=primary_caption, all_captions=all_captions
+        )
 
         # ----------------------------------------------------------------
-        # Mark ALL processed posts as published
+        # Mark ALL processed posts as published ONLY on success
         # ----------------------------------------------------------------
-        for _, _, unique_key in all_posts:
-            published_ids.add(unique_key)
-
-        try:
-            published_ids_file.write_text(json.dumps(list(published_ids)))
-            logger.info(f"Saved {len(all_posts)} new published ID(s).")
-        except Exception as save_err:
-            logger.warning(f"Could not save published IDs: {save_err}")
+        if upload_result:
+            for _, _, unique_key in all_posts:
+                if unique_key not in published_ids:
+                    published_ids.append(unique_key)
+            MAX_PUBLISHED_IDS = 30
+            pruned_ids = published_ids
+            if len(published_ids) > MAX_PUBLISHED_IDS:
+                pruned_ids = published_ids[-MAX_PUBLISHED_IDS:]
+                logger.info(
+                    f"Pruned published IDs from {len(published_ids)} → {MAX_PUBLISHED_IDS}."
+                )
+            try:
+                published_ids_file.write_text(json.dumps(pruned_ids))
+                logger.info(f"Saved {len(all_posts)} new published ID(s).")
+            except Exception as save_err:
+                logger.warning(f"Could not save published IDs: {save_err}")
+        else:
+            logger.warning("Upload did not succeed — published IDs NOT saved; posts will retry next run.")
 
         # Clean up output video
         if video_path.exists():
