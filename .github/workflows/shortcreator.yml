@@ -25,7 +25,7 @@ jobs:
           
       - name: Install sys dependencies
         run: |
-          apt-get update --fix-missing
+          sudo apt-get update --fix-missing
           sudo apt-get install -y ffmpeg
         
       - name: Install dependencies
