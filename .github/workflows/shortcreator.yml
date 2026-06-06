@@ -2,7 +2,7 @@ name: Short Creator
 
 on:
   schedule:
-    - cron: '0 */07 * * *'  # Every 07 hours
+    - cron: '0 */6 * * *'  # Every 6 hours
   workflow_dispatch:         # Manual trigger
 
 jobs:
